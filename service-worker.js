@@ -13,10 +13,14 @@ self.addEventListener('activate', (e)=>{
   self.clients.claim();
 });
 
+// 優先連網抓最新版本；只有真的離線、連不上網路時，才退回用手機裡存的舊版本。
+// 這樣你在 GitHub 更新檔案後，手機上會抓到新版，不會一直卡在舊版的快取。
 self.addEventListener('fetch', (e)=>{
   e.respondWith(
-    caches.match(e.request).then(cached=>
-      cached || fetch(e.request).catch(()=> caches.match('./index.html'))
-    )
+    fetch(e.request).then(res=>{
+      const resClone = res.clone();
+      caches.open(CACHE_NAME).then(cache=> cache.put(e.request, resClone)).catch(()=>{});
+      return res;
+    }).catch(()=> caches.match(e.request).then(cached=> cached || caches.match('./index.html')))
   );
 });
