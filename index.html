@@ -408,7 +408,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 
   <section id="tab-settings" style="display:none">
     <details class="settings-section">
-      <summary>狂記帳 · 功能說明 · 完全美費 · Ger設計</summary>
+      <summary>狂記帳 · 功能說明 · 完全免費 · Ger設計</summary>
       <div class="settings-body help-doc">
         <h4>一、記帳</h4>
         <ul>
@@ -581,16 +581,25 @@ function dateToLocalYMD(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).
 function todayLocal(){ return dateToLocalYMD(new Date()); }
 function thisMonthLocal(){ const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
 
-const ENCOURAGEMENTS = [
-  "每一筆記錄，都是為未來的自己留下線索。",
-  "持續記帳，是對自己最溫柔的誠實。",
-  "小小的堅持，累積成大大的餘裕。",
-  "今天也辛苦了，錢有記，心就安。",
-  "習慣正在養成，你做得很好。",
-  "數字不會說謊，你已經比昨天更了解自己了。",
-  "願你花的每一分錢，都花在心之所向。",
-  "記帳不是限制，是給自己選擇的自由。"
-];
+// 記帳小語：不放在系統裡管理，改成讀取旁邊那份 quotes.json 檔案，以後要換句子直接改那個檔案就好，不用動這裡。
+// 每天固定顯示同一句（用日期算出一個固定的索引），不是每次重新整理就換一句；quotes.json 抓不到時用這組保底句子。
+const FALLBACK_QUOTES = ["每一筆記錄，都是為未來的自己留下線索。","持續記帳，是對自己最溫柔的誠實。"];
+let remoteQuotes = [];
+async function loadQuotesFile(){
+  try{
+    const res = await fetch('./quotes.json', { cache:'no-store' });
+    if(!res.ok) throw new Error('quotes.json not found');
+    const data = await res.json();
+    if(Array.isArray(data) && data.length>0) remoteQuotes = data.filter(s=>typeof s==='string' && s.trim());
+  }catch(err){ /* 抓不到就用保底句子，不影響其他功能 */ }
+}
+function pickDailyQuote(){
+  const pool = remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES;
+  const dateStr = todayLocal();
+  let hash = 0;
+  for(let i=0;i<dateStr.length;i++){ hash = (hash*31 + dateStr.charCodeAt(i)) >>> 0; }
+  return pool[hash % pool.length];
+}
 
 const CURRENCY_NAME_TO_CODE = {
   '新台幣':'TWD','台幣':'TWD','台灣':'TWD',
@@ -778,6 +787,7 @@ async function loadData(){
   setStatus('','已存於本機');
   renderAll();
   renderExportReminderSettings();
+  loadQuotesFile().then(()=> renderDayCount());
   if(navigator.onLine){
     fetchExchangeRates(false).then(ok=>{ if(ok){ renderTags(); updateCurrencyNote(); renderAssetDashboard(); renderStats(); } });
   }
@@ -2036,7 +2046,7 @@ function renderDayCount(){
   } else {
     const diffDays = Math.floor((today - first)/86400000) + 1;
     numEl.textContent = `Day ${diffDays}`;
-    qEl.textContent = ENCOURAGEMENTS[Math.floor(Math.random()*ENCOURAGEMENTS.length)];
+    qEl.textContent = pickDailyQuote();
   }
 
   if(config.startDate){
