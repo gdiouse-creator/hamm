@@ -189,6 +189,14 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
   <div class="splash-sub">PERSONAL LEDGER</div>
 </div>
 
+<div id="exportReminderModal" style="display:none;position:fixed;inset:0;background:rgba(29,42,68,0.5);z-index:9998;align-items:center;justify-content:center;">
+  <div class="card" style="max-width:300px;margin:20px;text-align:center;">
+    <p id="exportReminderText" style="font-size:14px;margin:0 0 16px;"></p>
+    <button class="btn-primary" id="reminderExportBtn" style="margin-bottom:12px;">⇪ 立即匯出</button>
+    <div><span id="reminderSkipBtn" style="font-size:12px;color:var(--ink-soft);text-decoration:underline;cursor:pointer;">略過</span></div>
+  </div>
+</div>
+
 <header>
   <img src="icons/icon-192.png" class="header-logo" alt="狂記帳" onerror="this.style.display='none'">
   <h1>狂記帳</h1>
@@ -202,10 +210,20 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
   </summary>
   <div class="topbar-body">
     <p class="hint" style="margin-top:0">資料存在這台裝置裡，不會自動同步到其他裝置。要換裝置、或想留一份備份，請用「匯出」，到另一台裝置再「匯入」。</p>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
+      <span class="hint" style="margin:0;">匯出提醒</span>
+      <div class="chip-group" id="reminderDaysToggle">
+        <button data-days="3">3天</button>
+        <button data-days="5">5天</button>
+        <button data-days="7" class="on">7天</button>
+        <button data-days="30">30天</button>
+      </div>
+    </div>
     <button class="btn-small" id="exportBtn" style="width:100%;margin-bottom:10px;">匯出目前資料（分享／下載 JSON 檔）</button>
     <input type="file" id="importFile" accept="application/json" style="margin-bottom:10px;">
     <button class="btn-small" id="importBtn" style="width:100%;">匯入並覆蓋目前資料</button>
     <p class="hint" id="importStatus"></p>
+    <p class="hint" id="lastExportHint"></p>
     <hr style="border:none;border-top:1px dashed var(--paper-line);margin:14px 0;">
     <p class="hint" style="margin-top:0">CSV 可以直接用 Excel 打開編輯，適合系統萬一出問題時，先在 Excel 手動記帳、之後再匯入回來補資料。</p>
     <button class="btn-small" id="exportCsvBtn" style="width:100%;margin-bottom:10px;">匯出 CSV（可用 Excel 開啟）</button>
@@ -240,7 +258,16 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
     </div>
 
     <div class="card">
-      <h2>本月收支</h2>
+      <div style="display:flex;align-items:center;justify-content:center;gap:10px;">
+        <span class="del-sub" id="prevMonthBtn" style="font-size:16px;">◀</span>
+        <input type="month" id="statsMonthInput" style="max-width:160px;text-align:center;">
+        <span class="del-sub" id="nextMonthBtn" style="font-size:16px;">▶</span>
+      </div>
+      <p class="hint" id="monthResetHint" style="display:none;"><span id="resetMonthBtn" style="text-decoration:underline;cursor:pointer;">回到本月</span></p>
+    </div>
+
+    <div class="card">
+      <h2 id="statIncomeExpenseTitle">本月收支</h2>
       <div class="stat-total">
         <div><span>收入</span><b class="mono" id="statIncome" style="color:var(--stamp-green)">0</b></div>
         <div><span>支出</span><b class="mono" id="statExpense" style="color:var(--stamp-red)">0</b></div>
@@ -249,7 +276,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
     </div>
 
     <div class="card">
-      <h2>本月分類統計</h2>
+      <h2 id="catStatsTitle">本月分類統計</h2>
       <div class="type-toggle" id="catModeToggle">
         <button data-mode="expense" class="on">支出</button>
         <button data-mode="income">收入</button>
@@ -281,7 +308,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 
     <div class="card chart-card">
       <div class="chart-card-head">
-        <h2>分類細分（本月）</h2>
+        <h2 id="breakdownTitle">分類細分（本月）</h2>
         <div class="chip-row">
           <div class="chip-group" id="breakdownModeToggle">
             <button data-bmode="expense" class="on">支出</button>
@@ -473,9 +500,16 @@ const DEFAULT_CONFIG = {
   categorySubIcons: {},
   categoryTypeIcons: {},
   walletTypeIcons: {},
-  walletSubIcons: {}
+  walletSubIcons: {},
+  exportReminderDays: 7,
+  lastExportAt: null
 };
 function deepClone(obj){ return JSON.parse(JSON.stringify(obj)); }
+// 用「本機時區的今天」而不是 toISOString()（那個是 UTC 時間），
+// 不然台灣這種 UTC+8 的地區，半夜 0~8 點算出來的「今天」會整整早一天，記帳日期、匯出提醒等全部跟著算錯。
+function dateToLocalYMD(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function todayLocal(){ return dateToLocalYMD(new Date()); }
+function thisMonthLocal(){ const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
 
 const ENCOURAGEMENTS = [
   "每一筆記錄，都是為未來的自己留下線索。",
@@ -640,10 +674,12 @@ async function loadData(){
   migrateToCalibration();
   setStatus('','已存於本機');
   renderAll();
+  renderExportReminderSettings();
   if(navigator.onLine){
     fetchExchangeRates(false).then(ok=>{ if(ok){ renderTags(); updateCurrencyNote(); renderAssetDashboard(); renderStats(); } });
   }
   hideSplash();
+  checkExportReminder();
 }
 
 const splashStart = Date.now();
@@ -652,6 +688,45 @@ function hideSplash(){
   if(!el) return;
   const wait = Math.max(0, 600 - (Date.now()-splashStart));
   setTimeout(()=>{ el.style.opacity='0'; setTimeout(()=> el.remove(), 500); }, wait);
+}
+function getRecordBaselineDate(){
+  if(config.startDate) return config.startDate;
+  if(entries.length>0) return [...entries].map(e=>e.date).sort()[0];
+  return null;
+}
+function checkExportReminder(){
+  const days = config.exportReminderDays || 7;
+  const baseline = config.lastExportAt || getRecordBaselineDate();
+  if(!baseline) return; // 還沒有任何紀錄可以備份，不用提醒
+  const baseDate = new Date(baseline+'T00:00:00');
+  const today = new Date(todayLocal()+'T00:00:00');
+  const diffDays = Math.floor((today-baseDate)/86400000);
+  if(diffDays >= days){
+    document.getElementById('exportReminderText').textContent = `你已經 ${diffDays} 天沒有匯出備份了，要不要現在匯出一份？`;
+    document.getElementById('exportReminderModal').style.display = 'flex';
+  }
+}
+document.getElementById('reminderExportBtn').onclick = ()=>{
+  document.getElementById('exportReminderModal').style.display = 'none';
+  exportData();
+};
+document.getElementById('reminderSkipBtn').onclick = ()=>{
+  document.getElementById('exportReminderModal').style.display = 'none';
+};
+document.querySelectorAll('#reminderDaysToggle button').forEach(btn=>{
+  btn.onclick = ()=>{
+    document.querySelectorAll('#reminderDaysToggle button').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');
+    config.exportReminderDays = parseInt(btn.dataset.days,10);
+    saveConfig();
+  };
+});
+function renderExportReminderSettings(){
+  document.querySelectorAll('#reminderDaysToggle button').forEach(b=>{
+    b.classList.toggle('on', parseInt(b.dataset.days,10)===(config.exportReminderDays||7));
+  });
+  const hintEl = document.getElementById('lastExportHint');
+  if(hintEl) hintEl.textContent = config.lastExportAt ? `上次匯出：${config.lastExportAt}` : '尚未匯出過';
 }
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
@@ -700,7 +775,7 @@ function migrateToCalibration(){
   });
 
   // 2) 舊版手動維護的 walletBalances -> 補一筆起始校正紀錄（只在該錢包完全沒有任何交易/校正紀錄時才補，避免重複計入）
-  const baseDate = config.startDate || (entries.length>0 ? [...entries].map(e=>e.date).sort()[0] : new Date().toISOString().slice(0,10));
+  const baseDate = config.startDate || (entries.length>0 ? [...entries].map(e=>e.date).sort()[0] : todayLocal());
   Object.keys(config.walletBalances||{}).forEach(key=>{
     const bal = config.walletBalances[key];
     if(!bal || !bal.amount) return;
@@ -755,6 +830,8 @@ function migrateConfig(c){
   if(typeof c.categoryTypeIcons !== 'object' || c.categoryTypeIcons===null) c.categoryTypeIcons = {};
   if(typeof c.walletTypeIcons !== 'object' || c.walletTypeIcons===null) c.walletTypeIcons = {};
   if(typeof c.walletSubIcons !== 'object' || c.walletSubIcons===null) c.walletSubIcons = {};
+  if(![3,5,7,30].includes(c.exportReminderDays)) c.exportReminderDays = 7;
+  if(typeof c.lastExportAt !== 'string') c.lastExportAt = null;
   if(typeof c.startDate !== 'string') c.startDate = null;
   if(Array.isArray(c.wallets) && c.wallets.length>0){
     if(!c.walletTypes.includes('其他')) c.walletTypes.push('其他');
@@ -1565,9 +1642,11 @@ let categoryStatMode = 'expense';
 let pieMode = 'expense';
 let lineSeries = 'both';
 let listFilter = null;
+let selectedStatsMonth = null; // null = 跟著現在月份走；設定了就固定顯示那個月
+function getStatsMonth(){ return selectedStatsMonth || thisMonthLocal(); }
 
 function computeMonthCategoryAgg(mode){
-  const now = new Date(); const ym = now.toISOString().slice(0,7);
+  const ym = getStatsMonth();
   const monthEntries = entries.filter(e=>e.type===mode && e.date.startsWith(ym));
   const agg = {};
   monthEntries.forEach(e=>{
@@ -1630,7 +1709,7 @@ let breakdownMode = 'expense';
 let breakdownLevel = 'type';
 
 function computeCategorySubItems(mode){
-  const now = new Date(); const ym = now.toISOString().slice(0,7);
+  const ym = getStatsMonth();
   const agg = {};
   entries.filter(e=>e.type===mode && e.date.startsWith(ym) && e.categorySub).forEach(e=>{
     const label = categoryLabelWithIcon(e.categoryType, e.categorySub);
@@ -1640,7 +1719,7 @@ function computeCategorySubItems(mode){
   return Object.entries(agg).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label,value}));
 }
 function computeWalletSubItems(){
-  const now = new Date(); const ym = now.toISOString().slice(0,7);
+  const ym = getStatsMonth();
   const agg = {};
   entries.filter(e=>e.type==='expense' && e.date.startsWith(ym) && e.walletSub).forEach(e=>{
     const label = walletLabelWithIcon(e.walletType, e.walletSub);
@@ -1654,7 +1733,7 @@ function computeBreakdownData(mode, level){
     if(level==='sub'){
       return { kind:'single', items: computeWalletSubItems(), styleClass:'neutral' };
     }
-    const now = new Date(); const ym = now.toISOString().slice(0,7);
+    const ym = getStatsMonth();
     const agg = {};
     entries.filter(e=>e.type==='expense' && e.date.startsWith(ym)).forEach(e=>{
       const t = e.walletType || '未分類';
@@ -1746,7 +1825,7 @@ function computeSeries(granularity){
     const day = d.getDay();
     const diff = (day===0 ? -6 : 1-day);
     const monday = new Date(d); monday.setDate(d.getDate()+diff);
-    return monday.toISOString().slice(0,10);
+    return dateToLocalYMD(monday);
   }
   relevant.forEach(e=>{
     const key = bucketKeyFor(e.date);
@@ -1823,15 +1902,10 @@ function renderDayCount(){
   const numEl = document.getElementById('dayCountNum');
   const qEl = document.getElementById('dayCountQuote');
   const areaEl = document.getElementById('startDateArea');
-  const today = new Date(new Date().toISOString().slice(0,10)+'T00:00:00');
+  const today = new Date(todayLocal()+'T00:00:00');
 
-  let first = null;
-  if(config.startDate){
-    first = new Date(config.startDate+'T00:00:00');
-  } else if(entries.length>0){
-    const dates = entries.map(e=>e.date).sort();
-    first = new Date(dates[0]+'T00:00:00');
-  }
+  const baseline = getRecordBaselineDate();
+  const first = baseline ? new Date(baseline+'T00:00:00') : null;
 
   if(!first){
     numEl.textContent = 'Day 0';
@@ -1860,14 +1934,46 @@ function renderDayCount(){
   }
 }
 
+function monthLabel(ym){
+  const [y,m] = ym.split('-');
+  return `${y}年${parseInt(m,10)}月`;
+}
+function renderMonthSelector(){
+  const ym = getStatsMonth();
+  const input = document.getElementById('statsMonthInput');
+  if(document.activeElement !== input) input.value = ym;
+  const isCurrent = !selectedStatsMonth;
+  document.getElementById('monthResetHint').style.display = isCurrent ? 'none' : 'block';
+  document.getElementById('statIncomeExpenseTitle').textContent = `${monthLabel(ym)} 收支`;
+  document.getElementById('catStatsTitle').textContent = `${monthLabel(ym)} 分類統計`;
+  document.getElementById('breakdownTitle').textContent = `分類細分（${monthLabel(ym)}）`;
+}
+function shiftStatsMonth(delta){
+  const [y,m] = getStatsMonth().split('-').map(Number);
+  const d = new Date(y, m-1+delta, 1);
+  selectedStatsMonth = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  renderStats();
+}
+document.getElementById('prevMonthBtn').onclick = ()=> shiftStatsMonth(-1);
+document.getElementById('nextMonthBtn').onclick = ()=> shiftStatsMonth(1);
+document.getElementById('statsMonthInput').onchange = (ev)=>{
+  const val = ev.target.value;
+  if(!val) return;
+  const nowYm = thisMonthLocal();
+  selectedStatsMonth = (val===nowYm) ? null : val;
+  renderStats();
+};
+document.getElementById('resetMonthBtn').onclick = ()=>{ selectedStatsMonth = null; renderStats(); };
+
 function renderStats(){
-  const now = new Date(); const ym = now.toISOString().slice(0,7);
+  const ym = getStatsMonth();
   const monthEntries = entries.filter(e=>e.date.startsWith(ym) && e.type!=='transfer' && e.type!=='adjustment' && e.type!=='calibration');
   let income=0, expense=0;
   monthEntries.forEach(e=>{ const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency); if(e.type==='income') income+=amt; else expense+=amt; });
   document.getElementById('statIncome').textContent = income.toFixed(0);
   document.getElementById('statExpense').textContent = expense.toFixed(0);
   document.getElementById('statBalance').textContent = (income-expense).toFixed(0);
+  renderMonthSelector();
   renderDayCount();
   renderAssetDashboard();
   renderCategorySection();
@@ -1930,7 +2036,7 @@ function renderAll(){ fillSelects(); renderTags(); renderWalletSettings(); rende
 
 function refreshNow(){
   const now = new Date();
-  document.getElementById('fDate').value = now.toISOString().slice(0,10);
+  document.getElementById('fDate').value = dateToLocalYMD(now);
   document.getElementById('fTime').value = now.toTimeString().slice(0,5);
 }
 
@@ -2004,7 +2110,7 @@ document.getElementById('saveBtn').onclick = ()=>{
   const amount = document.getElementById('fAmount').value;
   if(entryType!=='calibration' && (!amount || parseFloat(amount)<=0)){ alert('請輸入有效金額'); return; }
   if(entryType==='calibration' && amount===''){ alert('請輸入現在實際金額'); return; }
-  const dateVal = document.getElementById('fDate').value || new Date().toISOString().slice(0,10);
+  const dateVal = document.getElementById('fDate').value || todayLocal();
   const timeVal = document.getElementById('fTime').value;
   const currencyVal = document.getElementById('fCurrency').value;
   const noteVal = document.getElementById('fNote').value;
@@ -2084,15 +2190,26 @@ document.getElementById('refreshRatesBtn').onclick = async ()=>{
 };
 
 document.getElementById('exportBtn').onclick = exportData;
+function recordExport(){
+  config.lastExportAt = todayLocal();
+  saveConfig();
+  renderExportReminderSettings();
+}
 async function exportData(){
-  const payload = { exportedAt: new Date().toISOString(), entries, config };
-  const filename = `ledger-backup-${new Date().toISOString().slice(0,10)}.json`;
+  // 檔案裡記錄的「上次匯出日」一定要是這次匯出當下的日期，不能是還沒更新前的舊值，
+  // 所以這裡先做一份「假設這次匯出成功」的快照存進檔案，但真正存回系統本機的狀態，
+  // 要等分享/下載確定觸發了才做，避免使用者取消分享時被誤判成「已經匯出」。
+  const todayStr = todayLocal();
+  const exportConfig = { ...config, lastExportAt: todayStr };
+  const payload = { exportedAt: new Date().toISOString(), entries, config: exportConfig };
+  const filename = `ledger-backup-${todayLocal()}.json`;
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
   if(navigator.share && navigator.canShare){
     try{
       const file = new File([blob], filename, { type:'application/json' });
       if(navigator.canShare({ files:[file] })){
         await navigator.share({ files:[file], title:'狂記帳備份', text:'記帳資料備份' });
+        recordExport();
         return;
       }
     }catch(err){
@@ -2104,6 +2221,7 @@ async function exportData(){
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  recordExport();
 }
 
 document.getElementById('importBtn').onclick = ()=>{
@@ -2122,6 +2240,7 @@ document.getElementById('importBtn').onclick = ()=>{
       migrateEntries();
       cleanupOtherBucket();
       backfillDefaultIcons();
+      recordExport();
       saveEntries(); saveConfig();
       renderAll();
       statusEl.textContent = `匯入成功，共 ${entries.length} 筆紀錄（匯出時間：${payload.exportedAt||'未知'}）`;
@@ -2171,13 +2290,14 @@ function decodeFileBuffer(buffer){
 function exportCSV(){
   const rows = entries.map(e => CSV_COLUMNS.map(c=>csvEscape(e[c])).join(','));
   const csv = [CSV_COLUMNS.join(','), ...rows].join('\r\n');
-  const filename = `ledger-backup-${new Date().toISOString().slice(0,10)}.csv`;
+  const filename = `ledger-backup-${todayLocal()}.csv`;
   const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  recordExport();
 }
 document.getElementById('exportCsvBtn').onclick = exportCSV;
 
@@ -2217,6 +2337,7 @@ document.getElementById('importCsvBtn').onclick = ()=>{
       migrateEntries();
       cleanupOtherBucket();
       backfillDefaultIcons();
+      recordExport();
       saveEntries(); saveConfig();
       renderAll();
       statusEl.textContent = `匯入成功，共 ${entries.length} 筆紀錄`;
