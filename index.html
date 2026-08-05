@@ -23,6 +23,8 @@ header::before{left:0;} header::after{right:0;}
 header h1{font-family:"Noto Serif TC",serif;font-size:26px;letter-spacing:4px;margin:0;}
 header p{margin:6px 0 0;font-size:12px;color:var(--ink-soft);letter-spacing:2px;}
 .topbar-panel{max-width:640px;margin:10px auto 0;padding:0 20px;}
+.reminder-bar{max-width:640px;margin:8px auto 0;padding:0 20px;text-align:center;font-size:11px;color:var(--ink-soft);}
+.reminder-bar-row{max-width:640px;margin:6px auto 0;padding:0 20px;display:flex;align-items:center;justify-content:center;gap:10px;}
 .topbar-panel summary{display:flex;justify-content:center;align-items:center;gap:8px;font-size:12px;color:var(--ink-soft);cursor:pointer;list-style:none;padding:4px 0;}
 .topbar-panel summary::-webkit-details-marker{display:none;}
 .topbar-body{background:var(--card);border:1px solid var(--paper-line);border-radius:6px;padding:14px;margin-top:6px;}
@@ -156,6 +158,11 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 .settings-section summary::before{content:'▸  ';color:var(--gold);}
 .settings-section[open] summary::before{content:'▾  ';}
 .settings-section .settings-body{padding:0 18px 18px;}
+.help-doc h4{font-family:"Noto Serif TC",serif;font-size:13px;color:var(--ink);margin:16px 0 8px;letter-spacing:1px;}
+.help-doc h4:first-child{margin-top:0;}
+.help-doc ul{margin:0 0 4px;padding-left:18px;}
+.help-doc ul ul{margin-top:4px;padding-left:16px;}
+.help-doc li{font-size:12px;color:var(--ink-soft);line-height:1.6;margin-bottom:5px;}
 .daycount{text-align:center;}
 .daycount .lbl{font-size:11px;color:var(--ink-soft);letter-spacing:2px;}
 .daycount .num{font-family:"Noto Serif TC",serif;font-size:32px;margin:6px 0;}
@@ -202,6 +209,16 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
   <h1>狂記帳</h1>
   <p>PERSONAL LEDGER</p>
 </header>
+<div class="reminder-bar" id="lastExportHint2"></div>
+<div class="reminder-bar-row">
+  <span class="hint" style="margin:0;">匯出提醒</span>
+  <div class="chip-group" id="reminderDaysToggle">
+    <button data-days="3">3天</button>
+    <button data-days="5">5天</button>
+    <button data-days="7" class="on">7天</button>
+    <button data-days="30">30天</button>
+  </div>
+</div>
 <details class="topbar-panel">
   <summary>
     <span class="dot" id="statusDot"></span><span id="statusText">讀取中…</span>
@@ -210,15 +227,6 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
   </summary>
   <div class="topbar-body">
     <p class="hint" style="margin-top:0">資料存在這台裝置裡，不會自動同步到其他裝置。要換裝置、或想留一份備份，請用「匯出」，到另一台裝置再「匯入」。</p>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
-      <span class="hint" style="margin:0;">匯出提醒</span>
-      <div class="chip-group" id="reminderDaysToggle">
-        <button data-days="3">3天</button>
-        <button data-days="5">5天</button>
-        <button data-days="7" class="on">7天</button>
-        <button data-days="30">30天</button>
-      </div>
-    </div>
     <button class="btn-small" id="exportBtn" style="width:100%;margin-bottom:10px;">匯出目前資料（分享／下載 JSON 檔）</button>
     <input type="file" id="importFile" accept="application/json" style="margin-bottom:10px;">
     <button class="btn-small" id="importBtn" style="width:100%;">匯入並覆蓋目前資料</button>
@@ -400,6 +408,68 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 
   <section id="tab-settings" style="display:none">
     <details class="settings-section">
+      <summary>狂記帳 · 功能說明 · 完全美費 · Ger設計</summary>
+      <div class="settings-body help-doc">
+        <h4>一、記帳</h4>
+        <ul>
+          <li>四種紀錄類型：支出／收入／轉帳／校正
+            <ul>
+              <li>支出、收入：選類別（兩層：大類＋子類別）、選錢包（兩層：類型＋明細）</li>
+              <li>轉帳：選「轉出」「轉入」兩個錢包，不計入收支統計</li>
+              <li>校正：實際盤點後（例如查銀行 App、數現金）跟系統算出來的對不上，直接輸入「現在實際金額」，系統自動記一筆差額，不計入收支統計，但會留下紀錄</li>
+            </ul>
+          </li>
+          <li>選任一欄位時，下方即時顯示該錢包「目前餘額」</li>
+          <li>支援多國貨幣，選外幣時即時顯示換算後新台幣金額</li>
+          <li>內建小算盤，金額欄位可直接按算式</li>
+          <li>類別／錢包若清單裡沒有，可用「＋」直接新增，不用跳頁</li>
+        </ul>
+        <h4>二、統計（儀表板）</h4>
+        <ul>
+          <li>目前資產：即時計算（起始值＋所有交易），不是手動維護的死數字，可點擊篩選看該錢包的相關紀錄</li>
+          <li>月份切換：可切換查看任何一個月的統計，不限於本月</li>
+          <li>本月收支：該月收入／支出／結餘</li>
+          <li>本月分類統計：手風琴形式，可展開看子類別明細，可直接在此新增子類別、點擊篩選跳轉到總表</li>
+          <li>收支趨勢圖：日／週／月／年四種粒度 × 綜合／收入／支出三種模式，圖表下方附文字數據表</li>
+          <li>分類細分：長條圖顯示，支出／收入／收支綜合／各錢包 四種角度，第一層／第二層可切換</li>
+        </ul>
+        <h4>三、總表</h4>
+        <ul>
+          <li>所有紀錄（含轉帳、校正）依時間排序</li>
+          <li>每筆紀錄顯示「異動前 → 異動後」的錢包餘額</li>
+          <li>可篩選（從統計頁點擊分類或錢包跳轉過來）</li>
+          <li>可編輯、可刪除</li>
+        </ul>
+        <h4>四、設定</h4>
+        <ul>
+          <li>支出類別／收入類別：新增、刪除子類別（刪除後舊紀錄自動歸回上層類別，不會遺失）；第一層類別只能改名、不能刪除，避免歷史紀錄找不到歸屬</li>
+          <li>錢包結構：新增、改名、刪除錢包類型與明細</li>
+          <li>貨幣與匯率：輸入國家名／貨幣名／三碼代號皆可辨識（涵蓋約 80 個國家地區），連網自動更新匯率，也可手動輸入</li>
+          <li>外觀配色：4 組預設配色，或自訂 8 種顏色（背景、邊框、文字、圖表色等）</li>
+          <li>類別／錢包項目都可設定專屬 emoji 圖示</li>
+        </ul>
+        <h4>五、資料與備份</h4>
+        <ul>
+          <li>資料存在本機裝置（IndexedDB），不經過雲端，離線也能記帳</li>
+          <li>匯出：JSON（完整備份，含設定）或 CSV（可用 Excel 開啟編輯）</li>
+          <li>匯入：對應匯出的兩種格式，CSV 自動辨識編碼與分隔符號</li>
+          <li>匯出提醒：可設定 3／5／7／30 天，超過天數開啟頁面會提醒，提醒視窗可直接匯出或略過</li>
+          <li>換裝置、資料轉移都靠「匯出→匯入」手動進行，不會自動跨裝置同步</li>
+        </ul>
+        <h4>六、App 化</h4>
+        <ul>
+          <li>可加到手機主畫面，全螢幕使用（PWA）</li>
+          <li>離線可開啟（service worker 快取），連上網會自動抓最新版本</li>
+          <li>自訂開場動畫與圖示</li>
+        </ul>
+        <h4>七、其他</h4>
+        <ul>
+          <li>所有金額換算鎖定「記帳當下」的匯率，之後匯率更新不會讓舊紀錄跟著變動</li>
+          <li>系統內部所有日期計算皆以裝置本地時區為準</li>
+        </ul>
+      </div>
+    </details>
+    <details class="settings-section">
       <summary>支出類別</summary>
       <div class="settings-body">
         <div id="categoryTypeBlocksExpense"></div>
@@ -526,7 +596,6 @@ const CURRENCY_NAME_TO_CODE = {
   '新台幣':'TWD','台幣':'TWD','台灣':'TWD',
   '美金':'USD','美元':'USD','美國':'USD',
   '日圓':'JPY','日幣':'JPY','日本':'JPY',
-  '歐元':'EUR','歐洲':'EUR',
   '英鎊':'GBP','英國':'GBP',
   '人民幣':'CNY','中國':'CNY','大陸':'CNY',
   '港幣':'HKD','香港':'HKD',
@@ -542,16 +611,50 @@ const CURRENCY_NAME_TO_CODE = {
   '印尼盾':'IDR','印尼':'IDR',
   '印度盧比':'INR','印度':'INR',
   '紐西蘭幣':'NZD','紐西蘭':'NZD',
-  '澳門幣':'MOP','澳門':'MOP'
+  '澳門幣':'MOP','澳門':'MOP',
+  // 歐元區（共用歐元，只要打國名就找得到）
+  '歐元':'EUR','歐洲':'EUR','歐盟':'EUR',
+  '德國':'EUR','法國':'EUR','義大利':'EUR','西班牙':'EUR','荷蘭':'EUR','比利時':'EUR',
+  '奧地利':'EUR','葡萄牙':'EUR','愛爾蘭':'EUR','芬蘭':'EUR','希臘':'EUR','盧森堡':'EUR',
+  '斯洛伐克':'EUR','斯洛維尼亞':'EUR','愛沙尼亞':'EUR','拉脫維亞':'EUR','立陶宛':'EUR',
+  '賽普勒斯':'EUR','馬爾他':'EUR','克羅埃西亞':'EUR',
+  // 其他歐洲
+  '瑞典':'SEK','挪威':'NOK','丹麥':'DKK','波蘭':'PLN','捷克':'CZK','匈牙利':'HUF',
+  '羅馬尼亞':'RON','保加利亞':'BGN','俄羅斯':'RUB','烏克蘭':'UAH','土耳其':'TRY','冰島':'ISK',
+  // 亞洲其他
+  '柬埔寨':'KHR','寮國':'LAK','老撾':'LAK','緬甸':'MMK','汶萊':'BND',
+  '巴基斯坦':'PKR','孟加拉':'BDT','斯里蘭卡':'LKR','尼泊爾':'NPR','蒙古':'MNT','哈薩克':'KZT',
+  // 中東
+  '以色列':'ILS','沙烏地阿拉伯':'SAR','沙國':'SAR','阿聯':'AED','杜拜':'AED','卡達':'QAR',
+  '科威特':'KWD','伊朗':'IRR','約旦':'JOD',
+  // 大洋洲
+  '斐濟':'FJD',
+  // 美洲
+  '墨西哥':'MXN','巴西':'BRL','阿根廷':'ARS','智利':'CLP','秘魯':'PEN','哥倫比亞':'COP',
+  // 非洲
+  '南非':'ZAR','埃及':'EGP','奈及利亞':'NGN','肯亞':'KES','摩洛哥':'MAD'
 };
 const CODE_TO_CURRENCY_NAME = {
   TWD:'新台幣', USD:'美金', JPY:'日圓', EUR:'歐元', GBP:'英鎊', CNY:'人民幣', HKD:'港幣',
   KRW:'韓元', THB:'泰銖', SGD:'新加坡幣', AUD:'澳幣', CAD:'加幣', CHF:'瑞士法郎',
-  MYR:'馬來西亞幣', VND:'越南盾', PHP:'菲律賓披索', IDR:'印尼盾', INR:'印度盧比', NZD:'紐西蘭幣', MOP:'澳門幣'
+  MYR:'馬來西亞幣', VND:'越南盾', PHP:'菲律賓披索', IDR:'印尼盾', INR:'印度盧比', NZD:'紐西蘭幣', MOP:'澳門幣',
+  SEK:'瑞典克朗', NOK:'挪威克朗', DKK:'丹麥克朗', PLN:'波蘭幣', CZK:'捷克克朗', HUF:'匈牙利福林',
+  RON:'羅馬尼亞列伊', BGN:'保加利亞列弗', RUB:'俄羅斯盧布', UAH:'烏克蘭赫夫納', TRY:'土耳其里拉', ISK:'冰島克朗',
+  KHR:'柬埔寨瑞爾', LAK:'寮國基普', MMK:'緬甸緬元', BND:'汶萊元',
+  PKR:'巴基斯坦盧比', BDT:'孟加拉塔卡', LKR:'斯里蘭卡盧比', NPR:'尼泊爾盧比', MNT:'蒙古圖格里克', KZT:'哈薩克堅戈',
+  ILS:'以色列謝克爾', SAR:'沙烏地里亞爾', AED:'阿聯迪拉姆', QAR:'卡達里亞爾', KWD:'科威特第納爾', IRR:'伊朗里亞爾', JOD:'約旦第納爾',
+  FJD:'斐濟元',
+  MXN:'墨西哥披索', BRL:'巴西雷亞爾', ARS:'阿根廷披索', CLP:'智利披索', PEN:'秘魯索爾', COP:'哥倫比亞披索',
+  ZAR:'南非蘭特', EGP:'埃及鎊', NGN:'奈及利亞奈拉', KES:'肯亞先令', MAD:'摩洛哥迪拉姆'
 };
 const DEFAULT_SEED_RATES = { // 1單位該貨幣約等於多少新台幣，僅為初次載入前的粗估值，連上網路會自動校正
   TWD:1, USD:31.5, JPY:0.21, EUR:34, GBP:39, CNY:4.3, HKD:4.0, KRW:0.023,
-  THB:0.87, SGD:23.3, AUD:20.5, CAD:22.7, CHF:35, MYR:6.8, VND:0.0013, PHP:0.55, IDR:0.002, INR:0.38, NZD:19, MOP:3.9
+  THB:0.87, SGD:23.3, AUD:20.5, CAD:22.7, CHF:35, MYR:6.8, VND:0.0013, PHP:0.55, IDR:0.002, INR:0.38, NZD:19, MOP:3.9,
+  SEK:3.0, NOK:2.9, DKK:4.6, PLN:7.9, CZK:1.4, HUF:0.086, RON:6.8, BGN:17.4, RUB:0.33, UAH:0.76, TRY:0.9, ISK:0.23,
+  KHR:0.0077, LAK:0.0015, MMK:0.015, BND:23.3, PKR:0.11, BDT:0.26, LKR:0.11, NPR:0.24, MNT:0.0092, KZT:0.06,
+  ILS:8.5, SAR:8.4, AED:8.6, QAR:8.6, KWD:102, IRR:0.00075, JOD:44.4,
+  FJD:14.1, MXN:1.6, BRL:5.6, ARS:0.032, CLP:0.033, PEN:8.4, COP:0.0077,
+  ZAR:1.7, EGP:0.63, NGN:0.02, KES:0.24, MAD:3.1
 };
 function currencyDisplayName(code){
   const meta = config.currencyMeta && config.currencyMeta[code];
@@ -725,8 +828,11 @@ function renderExportReminderSettings(){
   document.querySelectorAll('#reminderDaysToggle button').forEach(b=>{
     b.classList.toggle('on', parseInt(b.dataset.days,10)===(config.exportReminderDays||7));
   });
+  const text = config.lastExportAt ? `上次匯出：${config.lastExportAt}` : '尚未匯出過';
   const hintEl = document.getElementById('lastExportHint');
-  if(hintEl) hintEl.textContent = config.lastExportAt ? `上次匯出：${config.lastExportAt}` : '尚未匯出過';
+  if(hintEl) hintEl.textContent = text;
+  const hintEl2 = document.getElementById('lastExportHint2');
+  if(hintEl2) hintEl2.textContent = text;
 }
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
@@ -1187,8 +1293,9 @@ function renderStructureEditor(containerId, opts){
       return `<div class="tag"><span class="ren" data-rtype="${type}" data-rsub="${s}" title="點擊修改名稱／emoji">${iconPrefix}${s}</span><span class="x" data-type="${type}" data-sub="${s}">×</span></div>`;
     }).join('') || `<span class="hint">${opts.emptySubText}</span>`;
     const typeIcon = opts.getTypeIcon ? opts.getTypeIcon(type) : '';
+    const deleteTypeHtml = opts.canDeleteType===false ? '' : `<span class="del-type" data-type="${type}">${opts.deleteLabel}</span>`;
     return `<div class="wt-block">
-      <div class="wt-head"><b class="ren-type" data-rtype2="${type}" title="點擊修改名稱／emoji">${typeIcon}${type}</b><span class="del-type" data-type="${type}">${opts.deleteLabel}</span></div>
+      <div class="wt-head"><b class="ren-type" data-rtype2="${type}" title="點擊修改名稱／emoji">${typeIcon}${type}</b>${deleteTypeHtml}</div>
       <div class="tag-list">${tags}</div>
       <div class="add-tag-row"><input placeholder="${opts.addPlaceholder(type)}" data-newsub="${type}"><button class="btn-small" data-addsub="${type}">新增</button></div>
     </div>`;
@@ -1254,17 +1361,19 @@ document.getElementById('addWalletType').onclick = ()=>{
   saveConfig(); renderWalletSettings(); fillSelects(); renderAssetDashboard();
 };
 
+// 第一層類別不能刪除，只能改名——因為刪掉會讓過去的收支紀錄找不到自己屬於哪一類，改名不會。
 function deleteCategoryType(type){
-  if(!confirm(`刪除「${type}」這個類別？底下的子類別也會一併移除。`)) return;
-  config.categoryTypes = config.categoryTypes.filter(t=>t!==type);
-  delete config.categorySubs[type];
-  delete config.categoryKind[type];
-  saveConfig(); renderCategorySettings(); fillSelects(); renderStats();
+  alert('第一層類別不能刪除，只能改名字（點類別名稱本身即可修改）。');
 }
 function deleteCategorySub(type, sub){
+  if(!confirm(`刪除「${type}・${sub}」這個子類別？之前用這個子類別記的收支紀錄，會自動歸回「${type}」這個第一層類別，不會不見，只是不再細分。`)) return;
   config.categorySubs[type] = (config.categorySubs[type]||[]).filter(s=>s!==sub);
   if(config.categorySubIcons) delete config.categorySubIcons[type+'|'+sub];
-  saveConfig(); renderCategorySettings(); fillSelects(); renderStats();
+  entries.forEach(e=>{
+    if((e.type==='expense'||e.type==='income') && e.categoryType===type && e.categorySub===sub){ e.categorySub = ''; }
+  });
+  saveConfig(); saveEntries();
+  renderCategorySettings(); fillSelects(); renderList(); renderStats();
 }
 function addCategorySub(type, val){
   if(!config.categorySubs[type]) config.categorySubs[type]=[];
@@ -1283,6 +1392,7 @@ function renderCategorySettings(){
       emptySubText: '尚無子類別',
       emptyTypesText: '尚無此類別',
       onDeleteType: deleteCategoryType,
+      canDeleteType: false,
       onDeleteSub: deleteCategorySub,
       onEditSub: editCategorySubItem,
       onEditType: editCategoryTypeItem,
@@ -1399,12 +1509,15 @@ function renameCategoryType(oldType, newType){
   return true;
 }
 
-// ── 統一的「改名稱＋改emoji」互動：先問名稱、再問 emoji，兩者都可以直接跳過保留原樣 ──
+// ── 統一的「改名稱＋改emoji」互動：先問名稱、再問 emoji，兩者都可以直接跳過保留原樣；
+// 真的要改名字時，會再跳一次確認，避免手滑改錯、影響到過去所有紀錄的顯示。
 function editWalletSubItem(type, oldSub){
   const nameVal = window.prompt(`修改明細名稱（留空或不改則維持原樣）：`, oldSub);
   let finalSub = oldSub;
   if(nameVal!==null && nameVal.trim() && nameVal.trim()!==oldSub){
-    if(renameWalletSub(type, oldSub, nameVal.trim())) finalSub = nameVal.trim();
+    if(confirm(`確定要把「${oldSub}」改成「${nameVal.trim()}」嗎？過去記錄的收支也會一起改名。`)){
+      if(renameWalletSub(type, oldSub, nameVal.trim())) finalSub = nameVal.trim();
+    }
   }
   const curIcon = walletSubIcon(type, finalSub).trim();
   const iconVal = window.prompt(`修改「${finalSub}」的 emoji（留空＝不顯示 emoji）：`, curIcon);
@@ -1418,7 +1531,9 @@ function editWalletTypeItem(oldType){
   const nameVal = window.prompt(`修改錢包類型名稱（留空或不改則維持原樣）：`, oldType);
   let finalType = oldType;
   if(nameVal!==null && nameVal.trim() && nameVal.trim()!==oldType){
-    if(renameWalletType(oldType, nameVal.trim())) finalType = nameVal.trim();
+    if(confirm(`確定要把「${oldType}」改成「${nameVal.trim()}」嗎？過去記錄的收支也會一起改名。`)){
+      if(renameWalletType(oldType, nameVal.trim())) finalType = nameVal.trim();
+    }
   }
   const curIcon = walletTypeIcon(finalType).trim();
   const iconVal = window.prompt(`修改「${finalType}」的 emoji（留空＝不顯示 emoji）：`, curIcon);
@@ -1431,7 +1546,9 @@ function editCategorySubItem(type, oldSub){
   const nameVal = window.prompt(`修改子類別名稱（留空或不改則維持原樣）：`, oldSub);
   let finalSub = oldSub;
   if(nameVal!==null && nameVal.trim() && nameVal.trim()!==oldSub){
-    if(renameCategorySub(type, oldSub, nameVal.trim())) finalSub = nameVal.trim();
+    if(confirm(`確定要把「${oldSub}」改成「${nameVal.trim()}」嗎？過去記錄的收支也會一起改名。`)){
+      if(renameCategorySub(type, oldSub, nameVal.trim())) finalSub = nameVal.trim();
+    }
   }
   const curIcon = categorySubIcon(type, finalSub).trim();
   const iconVal = window.prompt(`修改「${finalSub}」的 emoji（留空＝不顯示 emoji）：`, curIcon);
@@ -1445,7 +1562,9 @@ function editCategoryTypeItem(oldType){
   const nameVal = window.prompt(`修改類別名稱（留空或不改則維持原樣）：`, oldType);
   let finalType = oldType;
   if(nameVal!==null && nameVal.trim() && nameVal.trim()!==oldType){
-    if(renameCategoryType(oldType, nameVal.trim())) finalType = nameVal.trim();
+    if(confirm(`確定要把「${oldType}」改成「${nameVal.trim()}」嗎？過去記錄的收支也會一起改名。`)){
+      if(renameCategoryType(oldType, nameVal.trim())) finalType = nameVal.trim();
+    }
   }
   const curIcon = categoryTypeIcon(finalType).trim();
   const iconVal = window.prompt(`修改「${finalType}」的 emoji（留空＝不顯示 emoji）：`, curIcon);
@@ -1721,12 +1840,15 @@ function computeCategorySubItems(mode){
 function computeWalletSubItems(){
   const ym = getStatsMonth();
   const agg = {};
+  config.walletTypes.forEach(type=>{
+    (config.walletSubs[type]||[]).forEach(sub=>{ agg[walletLabelWithIcon(type,sub)] = 0; });
+  });
   entries.filter(e=>e.type==='expense' && e.date.startsWith(ym) && e.walletSub).forEach(e=>{
     const label = walletLabelWithIcon(e.walletType, e.walletSub);
     const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
     agg[label] = (agg[label]||0) + amt;
   });
-  return Object.entries(agg).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label,value}));
+  return Object.entries(agg).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label,value}));
 }
 function computeBreakdownData(mode, level){
   if(mode==='wallet'){
@@ -1735,12 +1857,13 @@ function computeBreakdownData(mode, level){
     }
     const ym = getStatsMonth();
     const agg = {};
+    config.walletTypes.forEach(t=>{ agg[t] = 0; });
     entries.filter(e=>e.type==='expense' && e.date.startsWith(ym)).forEach(e=>{
       const t = e.walletType || '未分類';
       const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
       agg[t] = (agg[t]||0)+amt;
     });
-    const items = Object.entries(agg).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label:walletLabelWithIcon(label), value}));
+    const items = Object.entries(agg).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label:walletLabelWithIcon(label), value}));
     return { kind:'single', items, styleClass:'neutral' };
   }
   if(mode==='both'){
@@ -2172,7 +2295,7 @@ document.getElementById('saveBtn').onclick = ()=>{
 document.getElementById('addCurr').onclick = ()=>{
   const inp = document.getElementById('newCurr');
   const resolved = resolveCurrencyInput(inp.value);
-  if(!resolved){ alert('看不懂這個貨幣名稱，可以試試看輸入國家名（如：日本）、貨幣名（如：日圓）、或三碼代號（如：JPY）'); return; }
+  if(!resolved){ alert('目前的清單裡沒有這個名稱（已涵蓋大部分國家），可以直接輸入三碼貨幣代號（例如日本是 JPY，可以上網查「國家 貨幣代號」）'); return; }
   if(config.currencies.includes(resolved.code)){ inp.value=''; alert('這個貨幣已經加過了'); return; }
   config.currencies.push(resolved.code);
   config.currencyMeta[resolved.code] = { name: resolved.name, rate: DEFAULT_SEED_RATES[resolved.code]||1, updatedAt:null, source:'default' };
