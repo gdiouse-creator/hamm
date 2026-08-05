@@ -167,6 +167,28 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 .daycount .lbl{font-size:11px;color:var(--ink-soft);letter-spacing:2px;}
 .daycount .num{font-family:"Noto Serif TC",serif;font-size:32px;margin:6px 0;}
 .daycount .quote{font-size:12px;color:var(--ink-soft);}
+.draw-quote-btn{
+  margin:10px auto 0;
+  display:inline-block;
+  background:radial-gradient(circle at 50% 35%, #2b3a5c, var(--ink) 75%);
+  color:var(--gold);
+  border:1px solid rgba(201,162,39,0.35);
+  border-radius:6px;
+  padding:12px 30px;
+  font-family:"Noto Serif TC",serif;
+  font-size:13px;
+  font-weight:700;
+  letter-spacing:5px;
+  cursor:pointer;
+  animation:draw-btn-breathe 3.4s ease-in-out infinite;
+  transition:color .3s, border-color .3s, transform .15s;
+}
+.draw-quote-btn:hover{ color:#fff; border-color:var(--gold); }
+.draw-quote-btn:active{ transform:scale(0.96); }
+@keyframes draw-btn-breathe{
+  0%,100%{ box-shadow:0 0 6px rgba(201,162,39,0.2), inset 0 0 10px rgba(201,162,39,0.06); }
+  50%{ box-shadow:0 0 18px rgba(201,162,39,0.5), inset 0 0 16px rgba(201,162,39,0.16); }
+}
 #splashScreen{position:fixed;inset:0;background:var(--paper);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity .5s ease;}
 .splash-title{display:flex;align-items:flex-end;justify-content:center;gap:2px;}
 .splash-huge{font-family:"Noto Serif TC",serif;font-weight:900;font-size:clamp(120px,38vw,260px);line-height:0.85;color:var(--ink);letter-spacing:-6px;transform:skewX(-5deg);text-shadow:4px 4px 0 rgba(0,0,0,0.08);}
@@ -255,7 +277,8 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
     <div class="card daycount">
       <div class="lbl">持續記帳</div>
       <div class="num" id="dayCountNum">—</div>
-      <div class="quote" id="dayCountQuote"></div>
+      <button class="draw-quote-btn" id="drawQuoteBtn">🔮 今日籤語</button>
+      <div class="quote" id="dayCountQuote" style="display:none;"></div>
       <div id="startDateArea" style="margin-top:10px;"></div>
     </div>
 
@@ -593,12 +616,38 @@ async function loadQuotesFile(){
     if(Array.isArray(data) && data.length>0) remoteQuotes = data.filter(s=>typeof s==='string' && s.trim());
   }catch(err){ /* 抓不到就用保底句子，不影響其他功能 */ }
 }
-function pickDailyQuote(){
+// 今天抽到第幾句，存進獨立的 IndexedDB 格子裡（跟 entries/config 分開）。
+// 換日才重新抽一次；同一天不管開幾次網頁，都是同一句。
+let dailyQuoteIndex = null;
+let dailyQuoteRevealed = false;
+async function ensureDailyQuote(){
+  const today = todayLocal();
   const pool = remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES;
-  const dateStr = todayLocal();
-  let hash = 0;
-  for(let i=0;i<dateStr.length;i++){ hash = (hash*31 + dateStr.charCodeAt(i)) >>> 0; }
-  return pool[hash % pool.length];
+  let state = null;
+  try{ const v = await idbGet('ledger-quote-state'); state = v ? JSON.parse(v) : null; }catch(err){}
+  const needNewRoll = !state || state.date !== today || typeof state.index !== 'number' || state.index >= pool.length;
+  if(needNewRoll){
+    state = { date: today, index: Math.floor(Math.random()*pool.length), revealed:false };
+    try{ await idbSet('ledger-quote-state', JSON.stringify(state)); }catch(err){}
+  }
+  dailyQuoteIndex = state.index;
+  dailyQuoteRevealed = !!state.revealed;
+}
+async function revealDailyQuote(){
+  dailyQuoteRevealed = true;
+  try{
+    const v = await idbGet('ledger-quote-state');
+    const state = v ? JSON.parse(v) : { date: todayLocal(), index: dailyQuoteIndex };
+    state.revealed = true;
+    await idbSet('ledger-quote-state', JSON.stringify(state));
+  }catch(err){}
+  renderDayCount();
+}
+document.getElementById('drawQuoteBtn').onclick = revealDailyQuote;
+function pickSessionQuote(){
+  const pool = remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES;
+  if(dailyQuoteIndex===null) return pool[0]; // ensureDailyQuote 還沒跑完前的暫時顯示，跑完會自動補上正確的
+  return pool[dailyQuoteIndex % pool.length];
 }
 
 const CURRENCY_NAME_TO_CODE = {
@@ -787,7 +836,7 @@ async function loadData(){
   setStatus('','已存於本機');
   renderAll();
   renderExportReminderSettings();
-  loadQuotesFile().then(()=> renderDayCount());
+  loadQuotesFile().then(async ()=>{ await ensureDailyQuote(); renderDayCount(); });
   if(navigator.onLine){
     fetchExchangeRates(false).then(ok=>{ if(ok){ renderTags(); updateCurrencyNote(); renderAssetDashboard(); renderStats(); } });
   }
@@ -2034,6 +2083,7 @@ document.querySelectorAll('#lineSeriesToggle button').forEach(btn=>{
 function renderDayCount(){
   const numEl = document.getElementById('dayCountNum');
   const qEl = document.getElementById('dayCountQuote');
+  const btnEl = document.getElementById('drawQuoteBtn');
   const areaEl = document.getElementById('startDateArea');
   const today = new Date(todayLocal()+'T00:00:00');
 
@@ -2043,10 +2093,19 @@ function renderDayCount(){
   if(!first){
     numEl.textContent = 'Day 0';
     qEl.textContent = '寫下你的第一筆紀錄，或直接設定起始日，故事就開始了。';
+    qEl.style.display = 'block';
+    btnEl.style.display = 'none';
   } else {
     const diffDays = Math.floor((today - first)/86400000) + 1;
     numEl.textContent = `Day ${diffDays}`;
-    qEl.textContent = pickDailyQuote();
+    if(dailyQuoteRevealed){
+      qEl.textContent = pickSessionQuote();
+      qEl.style.display = 'block';
+      btnEl.style.display = 'none';
+    } else {
+      qEl.style.display = 'none';
+      btnEl.style.display = 'inline-block';
+    }
   }
 
   if(config.startDate){
