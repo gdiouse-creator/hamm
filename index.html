@@ -264,9 +264,9 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 </details>
 
 <nav>
-  <button data-tab="stats" class="active">統計</button>
+  <button data-tab="stats" class="active">總表</button>
   <button data-tab="entry">記帳</button>
-  <button data-tab="list">總表</button>
+  <button data-tab="list">記錄</button>
   <button data-tab="settings">設定</button>
 </nav>
 
@@ -354,6 +354,28 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
         </div>
       </div>
       <div id="breakdownView"></div>
+    </div>
+
+    <div class="card" style="padding:0;">
+      <details class="settings-section">
+        <summary>📊 財報圖表</summary>
+        <div class="settings-body">
+          <div class="chip-group" id="reportModeToggle" style="flex-wrap:wrap;row-gap:4px;">
+            <button data-report="networth" class="on">淨資產趨勢</button>
+            <button data-report="allocation">資產配置</button>
+            <button data-report="savingsrate">儲蓄率趨勢</button>
+            <button data-report="cumulative">累積結餘</button>
+            <button data-report="stacked">類別佔比變化</button>
+            <button data-report="compare">月對月比較</button>
+            <button data-report="topexpense">支出排行</button>
+            <button data-report="weekday">星期消費</button>
+          </div>
+          <p class="hint" id="reportModeHint" style="margin:10px 0 0;"></p>
+          <canvas id="reportChart" height="200" style="margin-top:8px;"></canvas>
+          <div id="reportBarsArea"></div>
+          <div id="reportTableArea"></div>
+        </div>
+      </details>
     </div>
   </section>
 
@@ -452,7 +474,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
           <li>目前資產：即時計算（起始值＋所有交易），不是手動維護的死數字，可點擊篩選看該錢包的相關紀錄</li>
           <li>月份切換：可切換查看任何一個月的統計，不限於本月</li>
           <li>本月收支：該月收入／支出／結餘</li>
-          <li>本月分類統計：手風琴形式，可展開看子類別明細，可直接在此新增子類別、點擊篩選跳轉到總表</li>
+          <li>本月分類統計：手風琴形式，可展開看子類別明細，可直接在此新增子類別、點擊篩選跳轉到記錄</li>
           <li>收支趨勢圖：日／週／月／年四種粒度 × 綜合／收入／支出三種模式，圖表下方附文字數據表</li>
           <li>分類細分：長條圖顯示，支出／收入／收支綜合／各錢包 四種角度，第一層／第二層可切換</li>
         </ul>
@@ -460,7 +482,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
         <ul>
           <li>所有紀錄（含轉帳、校正）依時間排序</li>
           <li>每筆紀錄顯示「異動前 → 異動後」的錢包餘額</li>
-          <li>可篩選（從統計頁點擊分類或錢包跳轉過來）</li>
+          <li>可篩選（從總表頁點擊分類或錢包跳轉過來）</li>
           <li>可編輯、可刪除</li>
         </ul>
         <h4>四、設定</h4>
@@ -2010,6 +2032,205 @@ document.querySelectorAll('#breakdownLevelToggle button').forEach(btn=>{
   };
 });
 
+// ══════════════ 財報圖表 ══════════════
+function getMonthEndDates(n){
+  const result = [];
+  const now = new Date(todayLocal()+'T00:00:00');
+  for(let i=n-1;i>=0;i--){
+    const d = new Date(now.getFullYear(), now.getMonth()-i+1, 0);
+    result.push({ label: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`, endDate: dateToLocalYMD(d) });
+  }
+  return result;
+}
+function computeWalletBalancesAsOfTWD(cutoffDate){
+  const balances = {};
+  entries.filter(e=> e.date <= cutoffDate).forEach(e=>{
+    if(e.type==='expense'){
+      const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
+      balances[e.walletType] = (balances[e.walletType]||0) - amt;
+    } else if(e.type==='income'){
+      const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
+      balances[e.walletType] = (balances[e.walletType]||0) + amt;
+    } else if(e.type==='calibration'){
+      const amt = (e.currency==='TWD') ? e.delta : toTWD(e.delta, e.currency);
+      balances[e.walletType] = (balances[e.walletType]||0) + amt;
+    } else if(e.type==='transfer'){
+      const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
+      balances[e.fromType] = (balances[e.fromType]||0) - amt;
+      balances[e.toType] = (balances[e.toType]||0) + amt;
+    }
+  });
+  return balances;
+}
+function computeNetWorthAsOf(cutoffDate){
+  return Object.values(computeWalletBalancesAsOfTWD(cutoffDate)).reduce((a,b)=>a+b, 0);
+}
+function aggCategoryForMonth(kind, ym){
+  const agg = {};
+  entries.filter(e=>e.type===kind && e.date.startsWith(ym)).forEach(e=>{
+    const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
+    agg[e.categoryType] = (agg[e.categoryType]||0) + amt;
+  });
+  return agg;
+}
+
+let reportMode = 'networth';
+let reportChartInstance = null;
+function renderReport(){
+  const hintEl = document.getElementById('reportModeHint');
+  const canvas = document.getElementById('reportChart');
+  const barsEl = document.getElementById('reportBarsArea');
+  const tableEl = document.getElementById('reportTableArea');
+  if(!hintEl || !canvas) return;
+  hintEl.textContent = ''; canvas.style.display = 'none'; barsEl.innerHTML=''; tableEl.innerHTML='';
+  if(reportChartInstance){ reportChartInstance.destroy(); reportChartInstance=null; }
+
+  const chartModes = ['networth','savingsrate','cumulative','stacked'];
+  if(chartModes.includes(reportMode)) canvas.style.display = 'block';
+
+  if(reportMode==='networth') renderNetWorthChart();
+  else if(reportMode==='savingsrate') renderSavingsRateChart();
+  else if(reportMode==='cumulative') renderCumulativeChart();
+  else if(reportMode==='stacked') renderStackedCategoryChart();
+  else if(reportMode==='allocation') renderAllocationBars();
+  else if(reportMode==='compare') renderCompareTable();
+  else if(reportMode==='topexpense') renderTopExpenseList();
+  else if(reportMode==='weekday') renderWeekdayBars();
+}
+document.querySelectorAll('#reportModeToggle button').forEach(btn=>{
+  btn.onclick = ()=>{
+    document.querySelectorAll('#reportModeToggle button').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');
+    reportMode = btn.dataset.report;
+    renderReport();
+  };
+});
+const reportDetailsEl = document.getElementById('reportModeToggle') ? document.getElementById('reportModeToggle').closest('details') : null;
+if(reportDetailsEl) reportDetailsEl.addEventListener('toggle', ()=>{ if(reportDetailsEl.open) renderReport(); });
+
+function renderNetWorthChart(){
+  document.getElementById('reportModeHint').textContent = '過去 12 個月，每月底的淨資產（所有錢包加總，含負債）。';
+  if(typeof Chart==='undefined') return;
+  const months = getMonthEndDates(12);
+  const data = months.map(m=> computeNetWorthAsOf(m.endDate));
+  reportChartInstance = new Chart(document.getElementById('reportChart').getContext('2d'), {
+    type:'line',
+    data:{ labels: months.map(m=>m.label), datasets:[{ label:'淨資產', data, borderColor:getThemeColor('--gold')||'#C9A227', backgroundColor:'transparent', borderWidth:2.5, tension:0.3, pointRadius:3 }]},
+    options:{ plugins:{legend:{display:false}}, scales:{ y:{ grid:{color:'#E4DCC8'} }, x:{ grid:{display:false} } } }
+  });
+}
+function renderSavingsRateChart(){
+  document.getElementById('reportModeHint').textContent = '每月「(收入－支出)÷收入」的儲蓄率，收入為 0 的月份不計算。';
+  if(typeof Chart==='undefined') return;
+  const series = computeSeries('month');
+  const labels=[], data=[];
+  series.labels.forEach((l,i)=>{ if(series.income[i]>0){ labels.push(l); data.push((series.income[i]-series.expense[i])/series.income[i]*100); } });
+  reportChartInstance = new Chart(document.getElementById('reportChart').getContext('2d'), {
+    type:'line',
+    data:{ labels, datasets:[{ label:'儲蓄率(%)', data, borderColor:getThemeColor('--stamp-green')||'#4C7A5C', backgroundColor:'transparent', borderWidth:2.5, tension:0.3, pointRadius:3 }]},
+    options:{ plugins:{legend:{display:false}}, scales:{ y:{ ticks:{callback:v=>v+'%'} }, x:{grid:{display:false}} } }
+  });
+}
+function renderCumulativeChart(){
+  document.getElementById('reportModeHint').textContent = '每月結餘（收入－支出）逐月累加，看整體資金走勢。';
+  if(typeof Chart==='undefined') return;
+  const series = computeSeries('month');
+  let running = 0;
+  const data = series.labels.map((l,i)=>{ running += (series.income[i]-series.expense[i]); return running; });
+  reportChartInstance = new Chart(document.getElementById('reportChart').getContext('2d'), {
+    type:'line',
+    data:{ labels: series.labels, datasets:[{ label:'累積結餘', data, borderColor:getThemeColor('--ink')||'#1D2A44', backgroundColor:'transparent', borderWidth:2.5, tension:0.3, pointRadius:3 }]},
+    options:{ plugins:{legend:{display:false}}, scales:{ y:{grid:{color:'#E4DCC8'}}, x:{grid:{display:false}} } }
+  });
+}
+function renderStackedCategoryChart(){
+  document.getElementById('reportModeHint').textContent = '過去 6 個月，各支出類別金額堆疊比較。';
+  if(typeof Chart==='undefined') return;
+  const months = getMonthEndDates(6);
+  const palette = ['#1D2A44','#C9A227','#B23A34','#4C7A5C','#8A96A8','#7C5C3E','#5C6B85','#A6785C','#6E8B74','#B08D57'];
+  const types = config.categoryTypes.filter(t=>config.categoryKind[t]==='expense');
+  const datasets = types.map((t,i)=>({
+    label:t,
+    data: months.map(m=>{
+      const agg = aggCategoryForMonth('expense', m.label);
+      return agg[t]||0;
+    }),
+    backgroundColor: palette[i%palette.length]
+  })).filter(ds => ds.data.some(v=>v>0));
+  reportChartInstance = new Chart(document.getElementById('reportChart').getContext('2d'), {
+    type:'bar',
+    data:{ labels: months.map(m=>m.label), datasets },
+    options:{ plugins:{legend:{position:'bottom', labels:{font:{size:10}}}}, scales:{ x:{stacked:true, grid:{display:false}}, y:{stacked:true, grid:{color:'#E4DCC8'}} } }
+  });
+}
+function renderAllocationBars(){
+  document.getElementById('reportModeHint').textContent = '目前資產在各錢包類型的佔比。';
+  const balances = computeWalletBalancesAsOfTWD(todayLocal());
+  const items = Object.entries(balances).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  const barsEl = document.getElementById('reportBarsArea');
+  if(items.length===0){ barsEl.innerHTML = '<div class="empty">尚無資產資料</div>'; return; }
+  const total = items.reduce((s,[,v])=>s+v,0);
+  const max = Math.max(...items.map(([,v])=>v));
+  barsEl.innerHTML = items.map(([label,v])=>`
+    <div class="bd-row">
+      <div class="bd-top"><span class="bd-label">${walletTypeIcon(label)}${label}</span><span class="bd-amt mono">${v.toFixed(0)}（${(v/total*100).toFixed(1)}%）</span></div>
+      <div class="bd-track"><div class="bd-fill neutral" style="width:${(v/max*100)}%"></div></div>
+    </div>`).join('');
+}
+function renderCompareTable(){
+  const thisYm = getStatsMonth();
+  const [y,m] = thisYm.split('-').map(Number);
+  const prevDate = new Date(y, m-2, 1);
+  const prevYm = `${prevDate.getFullYear()}-${String(prevDate.getMonth()+1).padStart(2,'0')}`;
+  document.getElementById('reportModeHint').textContent = `${monthLabel(prevYm)} vs ${monthLabel(thisYm)}，各支出類別對比。`;
+  const thisAgg = aggCategoryForMonth('expense', thisYm);
+  const prevAgg = aggCategoryForMonth('expense', prevYm);
+  const allTypes = [...new Set([...Object.keys(thisAgg), ...Object.keys(prevAgg)])];
+  const rows = allTypes.map(t=>({ type:t, prev: prevAgg[t]||0, cur: thisAgg[t]||0 }))
+    .filter(r=>r.prev>0||r.cur>0).sort((a,b)=>b.cur-a.cur);
+  const tableEl = document.getElementById('reportTableArea');
+  if(rows.length===0){ tableEl.innerHTML='<div class="empty">兩個月都尚無支出資料</div>'; return; }
+  tableEl.innerHTML = `<table class="line-table"><thead><tr><th>類別</th><th>${monthLabel(prevYm)}</th><th>${monthLabel(thisYm)}</th><th>變化</th></tr></thead><tbody>
+    ${rows.map(r=>{
+      const diff = r.cur - r.prev;
+      const diffStr = diff===0 ? '—' : (diff>0?'+':'') + diff.toFixed(0);
+      const color = diff>0 ? 'var(--stamp-red)' : diff<0 ? 'var(--stamp-green)' : 'var(--ink-soft)';
+      return `<tr><td>${categoryTypeIcon(r.type)}${r.type}</td><td class="mono">${r.prev.toFixed(0)}</td><td class="mono">${r.cur.toFixed(0)}</td><td class="mono" style="color:${color}">${diffStr}</td></tr>`;
+    }).join('')}
+  </tbody></table>`;
+}
+function renderTopExpenseList(){
+  const ym = getStatsMonth();
+  document.getElementById('reportModeHint').textContent = `${monthLabel(ym)} 金額最大的支出紀錄（最多列 10 筆）。`;
+  const items = entries.filter(e=>e.type==='expense' && e.date.startsWith(ym))
+    .map(e=>({ ...e, twd: (typeof e.twdAmount==='number')?e.twdAmount:toTWD(e.amount,e.currency) }))
+    .sort((a,b)=>b.twd-a.twd).slice(0,10);
+  const tableEl = document.getElementById('reportTableArea');
+  if(items.length===0){ tableEl.innerHTML='<div class="empty">本月尚無支出資料</div>'; return; }
+  tableEl.innerHTML = items.map((e,i)=>`
+    <div class="bd-row">
+      <div class="bd-top"><span class="bd-label">${i+1}. ${categoryLabelWithIcon(e.categoryType,e.categorySub)}${e.note?' · '+e.note:''}</span><span class="bd-amt mono">${e.twd.toFixed(0)}</span></div>
+    </div>`).join('');
+}
+function renderWeekdayBars(){
+  document.getElementById('reportModeHint').textContent = '所有歷史支出，依星期幾加總（看消費習慣，不限本月）。';
+  const labels = ['週日','週一','週二','週三','週四','週五','週六'];
+  const sums = [0,0,0,0,0,0,0];
+  entries.filter(e=>e.type==='expense').forEach(e=>{
+    const d = new Date(e.date+'T00:00:00');
+    const amt = (typeof e.twdAmount==='number')?e.twdAmount:toTWD(e.amount,e.currency);
+    sums[d.getDay()] += amt;
+  });
+  const items = labels.map((l,i)=>({label:l, value:sums[i]}));
+  const barsEl = document.getElementById('reportBarsArea');
+  const max = Math.max(...items.map(i=>i.value), 1);
+  barsEl.innerHTML = items.map(it=>`
+    <div class="bd-row">
+      <div class="bd-top"><span class="bd-label">${it.label}</span><span class="bd-amt mono">${it.value.toFixed(0)}</span></div>
+      <div class="bd-track"><div class="bd-fill expense" style="width:${(it.value/max*100)}%"></div></div>
+    </div>`).join('');
+}
+
 function renderCategorySection(){
   const agg = computeMonthCategoryAgg(categoryStatMode);
   renderCategoryAccordion(agg, categoryStatMode);
@@ -2200,6 +2421,7 @@ function renderStats(){
   renderCategorySection();
   renderBreakdown();
   renderLineChart();
+  if(reportDetailsEl && reportDetailsEl.open) renderReport();
 }
 
 document.getElementById('manualRefreshStatsBtn').onclick = ()=>{
