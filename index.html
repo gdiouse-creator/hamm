@@ -531,6 +531,9 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
         <div id="themeCustomGrid"></div>
       </div>
     </details>
+    <div style="text-align:center;margin-top:28px;">
+      <span id="clearAllDataBtn" style="font-size:10px;color:var(--paper-line);cursor:pointer;">清空所有數據</span>
+    </div>
   </section>
 
 </main>
@@ -809,6 +812,17 @@ async function idbSet(key, value){
     req.onerror = ()=> reject(req.error);
   });
 }
+
+document.getElementById('clearAllDataBtn').onclick = async ()=>{
+  if(!confirm('⚠️ 警告：這會永久刪除所有記帳紀錄、類別、錢包、配色等全部設定，無法復原！\n\n強烈建議先按上面的「⇪ 匯出」存一份備份，再繼續。\n\n真的要繼續嗎？')) return;
+  if(!confirm('⚠️ 再次確認：所有資料即將被永久清空，這是最後一次確認機會，按下「確定」之後無法救回任何東西。\n\n你確定已經備份好了，或不需要這些資料了嗎？')) return;
+  entries = [];
+  config = deepClone(DEFAULT_CONFIG);
+  try{ await idbSet('ledger-entries', JSON.stringify(entries)); }catch(err){}
+  try{ await idbSet('ledger-config', JSON.stringify(config)); }catch(err){}
+  try{ await idbSet('ledger-quote-state', JSON.stringify({date:null,index:0,revealed:false})); }catch(err){}
+  location.reload();
+};
 
 function setStatus(state, text){
   const dot = document.getElementById('statusDot');
