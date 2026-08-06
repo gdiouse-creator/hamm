@@ -371,6 +371,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
             <button data-report="weekday">星期消費</button>
           </div>
           <p class="hint" id="reportModeHint" style="margin:10px 0 0;"></p>
+          <div id="reportControlsArea" style="margin-top:6px;"></div>
           <canvas id="reportChart" height="200" style="margin-top:8px;"></canvas>
           <div id="reportBarsArea"></div>
           <div id="reportTableArea"></div>
@@ -2073,6 +2074,33 @@ function aggCategoryForMonth(kind, ym){
   });
   return agg;
 }
+function aggCategoryForRange(kind, startDate, endDate){
+  const agg = {};
+  entries.filter(e=>e.type===kind && e.date>=startDate && e.date<=endDate).forEach(e=>{
+    const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
+    agg[e.categoryType] = (agg[e.categoryType]||0) + amt;
+  });
+  return agg;
+}
+function getPeriodBuckets(granularity, count){
+  const today = new Date(todayLocal()+'T00:00:00');
+  const result = [];
+  for(let i=count-1;i>=0;i--){
+    if(granularity==='day'){
+      const d = new Date(today); d.setDate(d.getDate()-i);
+      const ds = dateToLocalYMD(d);
+      result.push({ label: ds, startDate: ds, endDate: ds });
+    } else if(granularity==='year'){
+      const y = today.getFullYear()-i;
+      result.push({ label: `${y}`, startDate: `${y}-01-01`, endDate: `${y}-12-31` });
+    } else {
+      const d = new Date(today.getFullYear(), today.getMonth()-i, 1);
+      const endD = new Date(d.getFullYear(), d.getMonth()+1, 0);
+      result.push({ label: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`, startDate: dateToLocalYMD(d), endDate: dateToLocalYMD(endD) });
+    }
+  }
+  return result;
+}
 
 let reportMode = 'networth';
 let reportChartInstance = null;
@@ -2081,8 +2109,9 @@ function renderReport(){
   const canvas = document.getElementById('reportChart');
   const barsEl = document.getElementById('reportBarsArea');
   const tableEl = document.getElementById('reportTableArea');
+  const ctrlEl = document.getElementById('reportControlsArea');
   if(!hintEl || !canvas) return;
-  hintEl.textContent = ''; canvas.style.display = 'none'; barsEl.innerHTML=''; tableEl.innerHTML='';
+  hintEl.textContent = ''; canvas.style.display = 'none'; barsEl.innerHTML=''; tableEl.innerHTML=''; ctrlEl.innerHTML='';
   if(reportChartInstance){ reportChartInstance.destroy(); reportChartInstance=null; }
 
   const chartModes = ['networth','savingsrate','cumulative','stacked'];
@@ -2143,23 +2172,48 @@ function renderCumulativeChart(){
     options:{ plugins:{legend:{display:false}}, scales:{ y:{grid:{color:'#E4DCC8'}}, x:{grid:{display:false}} } }
   });
 }
+let stackedGranularity = 'month';
+let stackedCount = 6;
 function renderStackedCategoryChart(){
-  document.getElementById('reportModeHint').textContent = '過去 6 個月，各支出類別金額堆疊比較。';
+  const ctrlEl = document.getElementById('reportControlsArea');
+  ctrlEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;">
+      <div class="chip-group" id="stackedGranToggle">
+        <button data-gran="day" class="${stackedGranularity==='day'?'on':''}">日</button>
+        <button data-gran="month" class="${stackedGranularity==='month'?'on':''}">月</button>
+        <button data-gran="year" class="${stackedGranularity==='year'?'on':''}">年</button>
+      </div>
+      <label class="hint" style="margin:0;">區間：<input type="number" id="stackedCountInput" min="2" max="24" value="${stackedCount}" style="width:50px;"> 筆</label>
+    </div>`;
+  document.querySelectorAll('#stackedGranToggle button').forEach(btn=>{
+    btn.onclick = ()=>{ stackedGranularity = btn.dataset.gran; renderStackedCategoryChart(); };
+  });
+  document.getElementById('stackedCountInput').onchange = (ev)=>{
+    let v = parseInt(ev.target.value,10);
+    if(isNaN(v)) v = 6;
+    v = Math.max(2, Math.min(24, v));
+    stackedCount = v;
+    renderStackedCategoryChart();
+  };
+
+  const granLabel = {day:'日',month:'月',year:'年'}[stackedGranularity];
+  document.getElementById('reportModeHint').textContent = `過去 ${stackedCount} 個${granLabel}，各支出類別金額堆疊比較。`;
   if(typeof Chart==='undefined') return;
-  const months = getMonthEndDates(6);
+  const buckets = getPeriodBuckets(stackedGranularity, stackedCount);
   const palette = ['#1D2A44','#C9A227','#B23A34','#4C7A5C','#8A96A8','#7C5C3E','#5C6B85','#A6785C','#6E8B74','#B08D57'];
   const types = config.categoryTypes.filter(t=>config.categoryKind[t]==='expense');
   const datasets = types.map((t,i)=>({
     label:t,
-    data: months.map(m=>{
-      const agg = aggCategoryForMonth('expense', m.label);
+    data: buckets.map(b=>{
+      const agg = aggCategoryForRange('expense', b.startDate, b.endDate);
       return agg[t]||0;
     }),
     backgroundColor: palette[i%palette.length]
   })).filter(ds => ds.data.some(v=>v>0));
+  if(reportChartInstance) reportChartInstance.destroy();
   reportChartInstance = new Chart(document.getElementById('reportChart').getContext('2d'), {
     type:'bar',
-    data:{ labels: months.map(m=>m.label), datasets },
+    data:{ labels: buckets.map(b=>b.label), datasets },
     options:{ plugins:{legend:{position:'bottom', labels:{font:{size:10}}}}, scales:{ x:{stacked:true, grid:{display:false}}, y:{stacked:true, grid:{color:'#E4DCC8'}} } }
   });
 }
@@ -2177,11 +2231,27 @@ function renderAllocationBars(){
       <div class="bd-track"><div class="bd-fill neutral" style="width:${(v/max*100)}%"></div></div>
     </div>`).join('');
 }
+let compareMonthA = null;
+let compareMonthB = null;
 function renderCompareTable(){
-  const thisYm = getStatsMonth();
-  const [y,m] = thisYm.split('-').map(Number);
-  const prevDate = new Date(y, m-2, 1);
-  const prevYm = `${prevDate.getFullYear()}-${String(prevDate.getMonth()+1).padStart(2,'0')}`;
+  if(!compareMonthA || !compareMonthB){
+    const thisYm = getStatsMonth();
+    const [y,m] = thisYm.split('-').map(Number);
+    const prevDate = new Date(y, m-2, 1);
+    compareMonthA = `${prevDate.getFullYear()}-${String(prevDate.getMonth()+1).padStart(2,'0')}`;
+    compareMonthB = thisYm;
+  }
+  const ctrlEl = document.getElementById('reportControlsArea');
+  ctrlEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;">
+      <input type="month" id="compareMonthAInput" value="${compareMonthA}" style="max-width:140px;">
+      <span class="hint" style="margin:0;">vs</span>
+      <input type="month" id="compareMonthBInput" value="${compareMonthB}" style="max-width:140px;">
+    </div>`;
+  document.getElementById('compareMonthAInput').onchange = (ev)=>{ if(ev.target.value){ compareMonthA = ev.target.value; renderCompareTable(); } };
+  document.getElementById('compareMonthBInput').onchange = (ev)=>{ if(ev.target.value){ compareMonthB = ev.target.value; renderCompareTable(); } };
+
+  const prevYm = compareMonthA, thisYm = compareMonthB;
   document.getElementById('reportModeHint').textContent = `${monthLabel(prevYm)} vs ${monthLabel(thisYm)}，各支出類別對比。`;
   const thisAgg = aggCategoryForMonth('expense', thisYm);
   const prevAgg = aggCategoryForMonth('expense', prevYm);
@@ -2199,24 +2269,48 @@ function renderCompareTable(){
     }).join('')}
   </tbody></table>`;
 }
+let topExpenseMonth = null;
 function renderTopExpenseList(){
-  const ym = getStatsMonth();
+  if(!topExpenseMonth) topExpenseMonth = getStatsMonth();
+  const ctrlEl = document.getElementById('reportControlsArea');
+  ctrlEl.innerHTML = `<div style="text-align:center;"><input type="month" id="topExpenseMonthInput" value="${topExpenseMonth}" style="max-width:140px;"></div>`;
+  document.getElementById('topExpenseMonthInput').onchange = (ev)=>{ if(ev.target.value){ topExpenseMonth = ev.target.value; renderTopExpenseList(); } };
+
+  const ym = topExpenseMonth;
   document.getElementById('reportModeHint').textContent = `${monthLabel(ym)} 金額最大的支出紀錄（最多列 10 筆）。`;
   const items = entries.filter(e=>e.type==='expense' && e.date.startsWith(ym))
     .map(e=>({ ...e, twd: (typeof e.twdAmount==='number')?e.twdAmount:toTWD(e.amount,e.currency) }))
     .sort((a,b)=>b.twd-a.twd).slice(0,10);
   const tableEl = document.getElementById('reportTableArea');
-  if(items.length===0){ tableEl.innerHTML='<div class="empty">本月尚無支出資料</div>'; return; }
+  if(items.length===0){ tableEl.innerHTML='<div class="empty">該月尚無支出資料</div>'; return; }
   tableEl.innerHTML = items.map((e,i)=>`
     <div class="bd-row">
       <div class="bd-top"><span class="bd-label">${i+1}. ${categoryLabelWithIcon(e.categoryType,e.categorySub)}${e.note?' · '+e.note:''}</span><span class="bd-amt mono">${e.twd.toFixed(0)}</span></div>
     </div>`).join('');
 }
+let weekdayStartDate = '';
+let weekdayEndDate = '';
 function renderWeekdayBars(){
-  document.getElementById('reportModeHint').textContent = '所有歷史支出，依星期幾加總（看消費習慣，不限本月）。';
+  const ctrlEl = document.getElementById('reportControlsArea');
+  ctrlEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;">
+      <input type="date" id="weekdayStartInput" value="${weekdayStartDate}" style="max-width:130px;">
+      <span class="hint" style="margin:0;">～</span>
+      <input type="date" id="weekdayEndInput" value="${weekdayEndDate}" style="max-width:130px;">
+      <span id="weekdayResetBtn" class="hint" style="margin:0;text-decoration:underline;cursor:pointer;">全部</span>
+    </div>`;
+  document.getElementById('weekdayStartInput').onchange = (ev)=>{ weekdayStartDate = ev.target.value; renderWeekdayBars(); };
+  document.getElementById('weekdayEndInput').onchange = (ev)=>{ weekdayEndDate = ev.target.value; renderWeekdayBars(); };
+  document.getElementById('weekdayResetBtn').onclick = ()=>{ weekdayStartDate=''; weekdayEndDate=''; renderWeekdayBars(); };
+
+  const rangeText = (weekdayStartDate||weekdayEndDate) ? `${weekdayStartDate||'最早'} ～ ${weekdayEndDate||'最新'}` : '全部歷史';
+  document.getElementById('reportModeHint').textContent = `${rangeText}的支出，依星期幾加總（看消費習慣）。`;
   const labels = ['週日','週一','週二','週三','週四','週五','週六'];
   const sums = [0,0,0,0,0,0,0];
-  entries.filter(e=>e.type==='expense').forEach(e=>{
+  entries.filter(e=> e.type==='expense'
+    && (!weekdayStartDate || e.date>=weekdayStartDate)
+    && (!weekdayEndDate || e.date<=weekdayEndDate)
+  ).forEach(e=>{
     const d = new Date(e.date+'T00:00:00');
     const amt = (typeof e.twdAmount==='number')?e.twdAmount:toTWD(e.amount,e.currency);
     sums[d.getDay()] += amt;
