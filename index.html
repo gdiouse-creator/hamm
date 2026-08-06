@@ -606,7 +606,7 @@ function thisMonthLocal(){ const d = new Date(); return `${d.getFullYear()}-${St
 
 // 記帳小語：不放在系統裡管理，改成讀取旁邊那份 quotes.json 檔案，以後要換句子直接改那個檔案就好，不用動這裡。
 // 每天固定顯示同一句（用日期算出一個固定的索引），不是每次重新整理就換一句；quotes.json 抓不到時用這組保底句子。
-const FALLBACK_QUOTES = ["勇敢、隨意、譏諷、狂野──這是智慧對我們的要求。－尼采《查拉圖斯特拉如是說》","永恆的不完美、構成恆久的矛盾、缺陷的意象。－尼采《查拉圖斯特拉如是說》","我的驕傲與我的智慧是同時並存的。－尼采《查拉圖斯特拉如是說》","縱使在死亡中，也要渴望，不能因渴望而死。－尼采《悲劇的誕生》","相信存在的永恆快樂。－尼采《悲劇的誕生》","凡是成為美的東西，也一定是可以感覺的。－尼采《悲劇的誕生》","智慧是對自然所犯的一種罪行。－尼采《悲劇的誕生》","在知識的汪洋大海中找到一個涯岸。－尼采《悲劇的誕生》","收集財富因此變得更為窮困。－尼采《查拉圖斯特拉如是說》","世俗也要從你這裡獲得一個是，或一個不。－尼采《查拉圖斯特拉如是說》","凡是一個人想得多的事情，總是成問題的。－尼采《查拉圖斯特拉如是說》"];
+const FALLBACK_QUOTES = ["每天記一筆，生活不容易。"];
 let remoteQuotes = [];
 async function loadQuotesFile(){
   try{
@@ -644,6 +644,13 @@ async function revealDailyQuote(){
   renderDayCount();
 }
 document.getElementById('drawQuoteBtn').onclick = revealDailyQuote;
+async function forceNewQuoteDraw(){
+  const pool = remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES;
+  const state = { date: todayLocal(), index: Math.floor(Math.random()*pool.length), revealed:false };
+  try{ await idbSet('ledger-quote-state', JSON.stringify(state)); }catch(err){}
+  dailyQuoteIndex = state.index;
+  dailyQuoteRevealed = false;
+}
 function pickSessionQuote(){
   const pool = remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES;
   if(dailyQuoteIndex===null) return pool[0]; // ensureDailyQuote 還沒跑完前的暫時顯示，跑完會自動補上正確的
@@ -851,14 +858,18 @@ function hideSplash(){
   const wait = Math.max(0, 600 - (Date.now()-splashStart));
   setTimeout(()=>{ el.style.opacity='0'; setTimeout(()=> el.remove(), 500); }, wait);
 }
+function getEarliestEntryDate(){
+  return entries.length>0 ? [...entries].map(e=>e.date).sort()[0] : null;
+}
 function getRecordBaselineDate(){
   if(config.startDate) return config.startDate;
-  if(entries.length>0) return [...entries].map(e=>e.date).sort()[0];
-  return null;
+  return getEarliestEntryDate();
 }
 function checkExportReminder(){
   const days = config.exportReminderDays || 7;
-  const baseline = config.lastExportAt || getRecordBaselineDate();
+  // 注意：這裡故意不用 getRecordBaselineDate()，因為那個會被使用者手動重設的「記帳起始日」影響——
+  // 匯出提醒的急迫性應該只跟「有多少資料還沒備份」有關，不該因為使用者重設天數顯示就被連帶重置。
+  const baseline = config.lastExportAt || getEarliestEntryDate();
   if(!baseline) return; // 還沒有任何紀錄可以備份，不用提醒
   const baseDate = new Date(baseline+'T00:00:00');
   const today = new Date(todayLocal()+'T00:00:00');
@@ -2111,8 +2122,10 @@ function renderDayCount(){
   if(config.startDate){
     areaEl.innerHTML = `<span class="hint">記帳起始日：${config.startDate}（<span id="resetStartDate" style="text-decoration:underline;cursor:pointer;">重新設定</span>）</span>`;
     document.getElementById('resetStartDate').onclick = ()=>{
-      if(!confirm('確定要重新設定記帳起始日嗎？')) return;
-      config.startDate = null; saveConfig(); renderDayCount();
+      if(!confirm('確定要重新設定記帳起始日嗎？會直接從今天重新算「第一天」，同時也會讓你可以重新抽一次今日籤語。')) return;
+      config.startDate = todayLocal();
+      saveConfig();
+      forceNewQuoteDraw().then(()=> renderDayCount());
     };
   } else {
     areaEl.innerHTML = `<input type="date" id="startDateInput" style="max-width:200px;margin:0 auto;display:block;">`;
