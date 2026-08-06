@@ -245,7 +245,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
   <summary>
     <span class="dot" id="statusDot"></span><span id="statusText">讀取中…</span>
     <button id="quickExportBtn" title="匯出／分享備份" onclick="event.preventDefault();event.stopPropagation();exportData();">⇪ 匯出</button>
-    <span class="topbar-arrow">▾ 備份</span>
+    <span class="topbar-arrow">▾ 導入資料/備份</span>
   </summary>
   <div class="topbar-body">
     <p class="hint" style="margin-top:0">資料存在這台裝置裡，不會自動同步到其他裝置。要換裝置、或想留一份備份，請用「匯出」，到另一台裝置再「匯入」。</p>
@@ -312,6 +312,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
         <button data-mode="expense" class="on">支出</button>
         <button data-mode="income">收入</button>
       </div>
+      <div id="catStatsControlsArea" style="margin:8px 0;"></div>
       <div id="statByCategory"></div>
     </div>
 
@@ -330,6 +331,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
             <button data-series="income">收入</button>
             <button data-series="expense">支出</button>
           </div>
+          <span id="lineCurrencySelectArea"></span>
         </div>
       </div>
       <canvas id="lineChart" height="200"></canvas>
@@ -345,12 +347,12 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
             <button data-bmode="expense" class="on">支出</button>
             <button data-bmode="income">收入</button>
             <button data-bmode="both">收支綜合</button>
-            <button data-bmode="wallet">錢包</button>
           </div>
           <div class="chip-group" id="breakdownLevelToggle">
             <button data-blevel="type" class="on">第一層</button>
             <button data-blevel="sub">第二層</button>
           </div>
+          <span id="breakdownCurrencySelectArea"></span>
         </div>
       </div>
       <div id="breakdownView"></div>
@@ -370,6 +372,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
             <button data-report="topexpense">支出排行</button>
             <button data-report="weekday">星期消費</button>
           </div>
+          <div style="text-align:center;margin-top:6px;" id="reportCurrencySelectArea"></div>
           <p class="hint" id="reportModeHint" style="margin:10px 0 0;"></p>
           <div id="reportControlsArea" style="margin-top:6px;"></div>
           <canvas id="reportChart" height="200" style="margin-top:8px;"></canvas>
@@ -620,6 +623,7 @@ const DEFAULT_CONFIG = {
   categoryTypeIcons: {},
   walletTypeIcons: {},
   walletSubIcons: {},
+  currencyIcons: {},
   exportReminderDays: 7,
   lastExportAt: null
 };
@@ -647,6 +651,7 @@ async function loadQuotesFile(){
 // 今天抽到第幾句，存進獨立的 IndexedDB 格子裡（跟 entries/config 分開）。
 // 換日才重新抽一次；同一天不管開幾次網頁，都是同一句。
 let dailyQuoteIndex = null;
+let startDateEditMode = false; // 記帳起始日預設鎖定顯示，要點「修改」才會打開輸入框，避免手滑誤觸
 let dailyQuoteRevealed = false;
 async function ensureDailyQuote(){
   const today = todayLocal();
@@ -740,6 +745,19 @@ const CODE_TO_CURRENCY_NAME = {
   MXN:'墨西哥披索', BRL:'巴西雷亞爾', ARS:'阿根廷披索', CLP:'智利披索', PEN:'秘魯索爾', COP:'哥倫比亞披索',
   ZAR:'南非蘭特', EGP:'埃及鎊', NGN:'奈及利亞奈拉', KES:'肯亞先令', MAD:'摩洛哥迪拉姆'
 };
+const DEFAULT_CURRENCY_ICONS = {
+  TWD:'🇹🇼', USD:'🇺🇸', JPY:'🇯🇵', EUR:'🇪🇺', GBP:'🇬🇧', CNY:'🇨🇳', HKD:'🇭🇰',
+  KRW:'🇰🇷', THB:'🇹🇭', SGD:'🇸🇬', AUD:'🇦🇺', CAD:'🇨🇦', CHF:'🇨🇭',
+  MYR:'🇲🇾', VND:'🇻🇳', PHP:'🇵🇭', IDR:'🇮🇩', INR:'🇮🇳', NZD:'🇳🇿', MOP:'🇲🇴',
+  SEK:'🇸🇪', NOK:'🇳🇴', DKK:'🇩🇰', PLN:'🇵🇱', CZK:'🇨🇿', HUF:'🇭🇺',
+  RON:'🇷🇴', BGN:'🇧🇬', RUB:'🇷🇺', UAH:'🇺🇦', TRY:'🇹🇷', ISK:'🇮🇸',
+  KHR:'🇰🇭', LAK:'🇱🇦', MMK:'🇲🇲', BND:'🇧🇳',
+  PKR:'🇵🇰', BDT:'🇧🇩', LKR:'🇱🇰', NPR:'🇳🇵', MNT:'🇲🇳', KZT:'🇰🇿',
+  ILS:'🇮🇱', SAR:'🇸🇦', AED:'🇦🇪', QAR:'🇶🇦', KWD:'🇰🇼', IRR:'🇮🇷', JOD:'🇯🇴',
+  FJD:'🇫🇯',
+  MXN:'🇲🇽', BRL:'🇧🇷', ARS:'🇦🇷', CLP:'🇨🇱', PEN:'🇵🇪', COP:'🇨🇴',
+  ZAR:'🇿🇦', EGP:'🇪🇬', NGN:'🇳🇬', KES:'🇰🇪', MAD:'🇲🇦'
+};
 const DEFAULT_SEED_RATES = { // 1單位該貨幣約等於多少新台幣，僅為初次載入前的粗估值，連上網路會自動校正
   TWD:1, USD:31.5, JPY:0.21, EUR:34, GBP:39, CNY:4.3, HKD:4.0, KRW:0.023,
   THB:0.87, SGD:23.3, AUD:20.5, CAD:22.7, CHF:35, MYR:6.8, VND:0.0013, PHP:0.55, IDR:0.002, INR:0.38, NZD:19, MOP:3.9,
@@ -749,9 +767,11 @@ const DEFAULT_SEED_RATES = { // 1單位該貨幣約等於多少新台幣，僅�
   FJD:14.1, MXN:1.6, BRL:5.6, ARS:0.032, CLP:0.033, PEN:8.4, COP:0.0077,
   ZAR:1.7, EGP:0.63, NGN:0.02, KES:0.24, MAD:3.1
 };
+function currencyIcon(code){ return (config.currencyIcons && config.currencyIcons[code]) || DEFAULT_CURRENCY_ICONS[code] || '\u00A0'; }
 function currencyDisplayName(code){
   const meta = config.currencyMeta && config.currencyMeta[code];
-  return (meta && meta.name) || CODE_TO_CURRENCY_NAME[code] || code;
+  const name = (meta && meta.name) || CODE_TO_CURRENCY_NAME[code] || code;
+  return `${currencyIcon(code)}${name}`;
 }
 function resolveCurrencyInput(text){
   const raw = text.trim();
@@ -767,6 +787,16 @@ function currentRate(code){
   return (meta && typeof meta.rate==='number') ? meta.rate : 1;
 }
 function toTWD(amount, code){ return (parseFloat(amount)||0) * currentRate(code); }
+function fromTWD(twdAmt, code){
+  if(!code || code==='TWD') return twdAmt;
+  const rate = currentRate(code);
+  if(!rate) return twdAmt;
+  return twdAmt / rate;
+}
+function currencyShortSuffix(code){ return (!code || code==='TWD') ? '' : ` ${code}`; }
+function buildCurrencySelectHtml(id, current){
+  return `<select id="${id}" style="max-width:110px;font-size:12px;padding:3px 4px;border-radius:4px;border:1px solid var(--paper-line);background:var(--card);color:var(--ink);">${config.currencies.map(c=>`<option value="${c}" ${c===current?'selected':''}>${currencyDisplayName(c)}</option>`).join('')}</select>`;
+}
 
 async function fetchExchangeRates(manualTrigger){
   if(!navigator.onLine){ if(manualTrigger) alert('目前離線，無法更新匯率'); return false; }
@@ -1045,6 +1075,7 @@ function migrateConfig(c){
   if(typeof c.categoryTypeIcons !== 'object' || c.categoryTypeIcons===null) c.categoryTypeIcons = {};
   if(typeof c.walletTypeIcons !== 'object' || c.walletTypeIcons===null) c.walletTypeIcons = {};
   if(typeof c.walletSubIcons !== 'object' || c.walletSubIcons===null) c.walletSubIcons = {};
+  if(typeof c.currencyIcons !== 'object' || c.currencyIcons===null) c.currencyIcons = {};
   if(![3,5,7,30].includes(c.exportReminderDays)) c.exportReminderDays = 7;
   if(typeof c.lastExportAt !== 'string') c.lastExportAt = null;
   if(typeof c.startDate !== 'string') c.startDate = null;
@@ -1363,18 +1394,25 @@ function renderTags(){
   const wrap = document.getElementById('currList');
   wrap.innerHTML = config.currencies.map(code=>{
     const meta = config.currencyMeta[code] || {name:code, rate:1, source:'default', updatedAt:null};
-    const sourceLabel = code==='TWD' ? '基準貨幣' : (meta.source==='auto' ? `自動・${meta.updatedAt?meta.updatedAt.slice(0,16).replace('T',' '):''}` : '手動設定');
+    const sourceLabel = code==='TWD' ? '基準貨幣' : (meta.source==='auto' ? `自動・${meta.updatedAt?meta.updatedAt.slice(0,16).replace('T',' '):''}` : '手動設定（查無即時匯率，需自行更新）');
     return `<div class="curr-row">
-      <div class="lbl">${currencyDisplayName(code)}<span class="curr-code">(${code})</span><div class="asset-auto-note">${sourceLabel}</div></div>
+      <div class="lbl ren" data-editcurr="${code}" style="cursor:pointer;" title="點擊修改名稱／emoji">${currencyDisplayName(code)}<span class="curr-code">(${code})</span><div class="asset-auto-note">${sourceLabel}</div></div>
       ${code==='TWD' ? '<div class="mono" style="text-align:right;color:var(--ink-soft);">1.0000</div>' : `<input class="mono" type="number" step="0.0001" data-rate="${code}" value="${meta.rate}">`}
       <span class="del-sub ${code==='TWD'?'disabled':''}" data-delcurr="${code}">刪除</span>
     </div>`;
   }).join('') || '<span class="hint">尚無項目</span>';
+  wrap.querySelectorAll('[data-editcurr]').forEach(el=>{
+    el.onclick = ()=> editCurrencyItem(el.dataset.editcurr);
+  });
   wrap.querySelectorAll('[data-delcurr]:not(.disabled)').forEach(el=>{
     el.onclick = ()=>{
-      if(!confirm(`刪除貨幣「${currencyDisplayName(el.dataset.delcurr)}」？`)) return;
-      config.currencies = config.currencies.filter(v=>v!==el.dataset.delcurr);
-      delete config.currencyMeta[el.dataset.delcurr];
+      const code = el.dataset.delcurr;
+      const inUse = entries.some(e=>e.currency===code);
+      if(inUse){ alert(`「${currencyDisplayName(code)}」還有紀錄在使用這個貨幣，沒辦法刪除，要刪除得先把用到它的紀錄改成別的貨幣或刪除。`); return; }
+      if(!confirm(`刪除貨幣「${currencyDisplayName(code)}」？`)) return;
+      config.currencies = config.currencies.filter(v=>v!==code);
+      delete config.currencyMeta[code];
+      if(config.currencyIcons) delete config.currencyIcons[code];
       saveConfig(); renderTags(); fillSelects();
     };
   });
@@ -1389,6 +1427,26 @@ function renderTags(){
       saveConfig(); renderTags(); updateCurrencyNote();
     };
   });
+}
+function renameCurrency(code, newName){
+  newName = newName.trim();
+  if(!newName || !config.currencyMeta[code] || newName===config.currencyMeta[code].name) return false;
+  config.currencyMeta[code].name = newName;
+  saveConfig(); renderTags(); fillSelects(); updateCurrencyNote();
+  return true;
+}
+function editCurrencyItem(code){
+  const curName = (config.currencyMeta[code] && config.currencyMeta[code].name) || code;
+  const nameVal = window.prompt(`修改「${curName}」的顯示名稱（留空或不改則維持原樣）：`, curName);
+  if(nameVal!==null && nameVal.trim() && nameVal.trim()!==curName){
+    if(confirm(`確定要把「${curName}」改成「${nameVal.trim()}」嗎？`)) renameCurrency(code, nameVal.trim());
+  }
+  const curIcon = currencyIcon(code).trim();
+  const iconVal = window.prompt(`修改這個貨幣的 emoji（例如國旗，留空＝不顯示 emoji）：`, curIcon);
+  if(iconVal===null) return;
+  if(!config.currencyIcons) config.currencyIcons = {};
+  if(iconVal.trim()) config.currencyIcons[code] = iconVal.trim(); else delete config.currencyIcons[code];
+  saveConfig(); renderTags(); fillSelects();
 }
 
 // 「支出類別／收入類別／錢包結構」三個設定區塊的畫面結構（標籤列表＋新增/刪除）完全一樣，
@@ -1430,11 +1488,9 @@ function renderStructureEditor(containerId, opts){
   });
 }
 
+// 第一層錢包類型不能刪除，只能改名——理由跟類別一樣：刪掉會讓過去的收支紀錄找不到自己屬於哪個錢包。
 function deleteWalletType(type){
-  if(!confirm(`刪除「${type}」這個錢包類型？底下的明細也會一併移除（歷史紀錄不受影響）。`)) return;
-  config.walletTypes = config.walletTypes.filter(t=>t!==type);
-  delete config.walletSubs[type];
-  saveConfig(); renderWalletSettings(); fillSelects(); renderAssetDashboard();
+  alert('第一層錢包類型不能刪除，只能改名字（點類型名稱本身即可修改）。');
 }
 function addWalletSub(type, val){
   if(!config.walletSubs[type]) config.walletSubs[type]=[];
@@ -1452,6 +1508,7 @@ function renderWalletSettings(){
     emptySubText: '尚無明細項目',
     emptyTypesText: '尚無類型',
     onDeleteType: deleteWalletType,
+    canDeleteType: false,
     onDeleteSub: deleteWalletSub,
     onEditSub: editWalletSubItem,
     onEditType: editWalletTypeItem,
@@ -1851,8 +1908,14 @@ function renderAssetDashboard(){
         items.push({ label, amount: balances[c], currency: c });
       });
     });
-    const amountText = Object.keys(byCurrency).length===0 ? '0' : Object.entries(byCurrency).map(([c,a])=>`${a.toFixed(0)} ${currencyDisplayName(c)}`).join(' / ');
-    const bodyHtml = items.length===0 ? '<div class="acc-empty">尚無明細</div>' : items.map(it=>`<div class="acc-sub-row clickable" data-wt="${type}" data-ws="${it.label===type?'':it.label}"><span>${it.label}</span><span class="mono">${it.amount.toFixed(0)} ${currencyDisplayName(it.currency)}</span></div>`).join('');
+    const amountText = Object.keys(byCurrency).length===0 ? '0' : Object.entries(byCurrency).map(([c,a])=>{
+      const twdNote = c!=='TWD' ? `<span class="entry-twd-note">≈ ${toTWD(a,c).toFixed(0)} 新台幣</span>` : '';
+      return `${a.toFixed(0)} ${currencyDisplayName(c)}${twdNote}`;
+    }).join(' / ');
+    const bodyHtml = items.length===0 ? '<div class="acc-empty">尚無明細</div>' : items.map(it=>{
+      const twdNote = it.currency!=='TWD' ? `<span class="entry-twd-note">≈ ${toTWD(it.amount,it.currency).toFixed(0)} 新台幣</span>` : '';
+      return `<div class="acc-sub-row clickable" data-wt="${type}" data-ws="${it.label===type?'':it.label}"><span>${it.label}</span><span class="mono">${it.amount.toFixed(0)} ${currencyDisplayName(it.currency)}${twdNote}</span></div>`;
+    }).join('');
     blocks.push({ key:type, title:walletLabelWithIcon(type), amountText, bodyHtml, plus:false, filter:true, onFilter: ()=>applyListFilter({kind:'wallet', walletType:type, walletSub:null}) });
   });
   if(blocks.length===0){ wrap.innerHTML = '<div class="empty">尚未建立現金／存款／虛擬／投資 錢包類型</div>'; }
@@ -1873,11 +1936,10 @@ let listFilter = null;
 let selectedStatsMonth = null; // null = 跟著現在月份走；設定了就固定顯示那個月
 function getStatsMonth(){ return selectedStatsMonth || thisMonthLocal(); }
 
-function computeMonthCategoryAgg(mode){
-  const ym = getStatsMonth();
-  const monthEntries = entries.filter(e=>e.type===mode && e.date.startsWith(ym));
+function computeCategoryAggForRange(mode, startDate, endDate){
+  const rangeEntries = entries.filter(e=>e.type===mode && e.date>=startDate && e.date<=endDate);
   const agg = {};
-  monthEntries.forEach(e=>{
+  rangeEntries.forEach(e=>{
     const t = e.categoryType || '未分類', s = e.categorySub || '';
     if(!agg[t]) agg[t] = {total:0, subs:{}};
     const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
@@ -1885,6 +1947,12 @@ function computeMonthCategoryAgg(mode){
     if(s) agg[t].subs[s] = (agg[t].subs[s]||0)+amt;
   });
   return agg;
+}
+function computeMonthCategoryAgg(mode){
+  const ym = getStatsMonth();
+  const [y,m] = ym.split('-').map(Number);
+  const endD = new Date(y, m, 0);
+  return computeCategoryAggForRange(mode, ym+'-01', dateToLocalYMD(endD));
 }
 
 function switchTab(name){
@@ -1916,14 +1984,15 @@ function entryMatchesFilter(e, filter){
   return e.categoryType===filter.categoryType && (!filter.categorySub || e.categorySub===filter.categorySub);
 }
 
-function renderCategoryAccordion(agg, mode){
+function renderCategoryAccordion(agg, mode, displayCurrency){
   const wrap = document.getElementById('statByCategory');
   if(!wrap) return;
+  const suffix = currencyShortSuffix(displayCurrency);
   const types = categoryTypesForKind(mode);
   const blocks = types.map(t=>{
     const data = agg[t] || {total:0, subs:{}};
-    const bodyHtml = Object.keys(data.subs).length===0 ? '<div class="acc-empty">本月尚無子類別資料</div>' : Object.entries(data.subs).sort((a,b)=>b[1]-a[1]).map(([s,amt])=>`<div class="acc-sub-row clickable" data-jt="${t}" data-js="${s}"><span>${categorySubIcon(t,s)}${s}</span><span class="mono">${amt.toFixed(0)}</span></div>`).join('');
-    return { key:t, title:categoryLabelWithIcon(t), amountText:data.total.toFixed(0), bodyHtml, plus:true, filter:true,
+    const bodyHtml = Object.keys(data.subs).length===0 ? '<div class="acc-empty">本月尚無子類別資料</div>' : Object.entries(data.subs).sort((a,b)=>b[1]-a[1]).map(([s,amt])=>`<div class="acc-sub-row clickable" data-jt="${t}" data-js="${s}"><span>${categorySubIcon(t,s)}${s}</span><span class="mono">${amt.toFixed(0)}${suffix}</span></div>`).join('');
+    return { key:t, title:categoryLabelWithIcon(t), amountText:data.total.toFixed(0)+suffix, bodyHtml, plus:true, filter:true,
       onPlus: ()=>quickAddCategorySub(t), onFilter: ()=>applyListFilter({kind:'category', categoryType:t, categorySub:null}) };
   });
   if(blocks.length===0){ wrap.innerHTML = `<div class="empty">尚無${mode==='income'?'收入':'支出'}類別，請先到「設定」新增</div>`; return; }
@@ -1946,35 +2015,7 @@ function computeCategorySubItems(mode){
   });
   return Object.entries(agg).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label,value}));
 }
-function computeWalletSubItems(){
-  const ym = getStatsMonth();
-  const agg = {};
-  config.walletTypes.forEach(type=>{
-    (config.walletSubs[type]||[]).forEach(sub=>{ agg[walletLabelWithIcon(type,sub)] = 0; });
-  });
-  entries.filter(e=>e.type==='expense' && e.date.startsWith(ym) && e.walletSub).forEach(e=>{
-    const label = walletLabelWithIcon(e.walletType, e.walletSub);
-    const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
-    agg[label] = (agg[label]||0) + amt;
-  });
-  return Object.entries(agg).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label,value}));
-}
 function computeBreakdownData(mode, level){
-  if(mode==='wallet'){
-    if(level==='sub'){
-      return { kind:'single', items: computeWalletSubItems(), styleClass:'neutral' };
-    }
-    const ym = getStatsMonth();
-    const agg = {};
-    config.walletTypes.forEach(t=>{ agg[t] = 0; });
-    entries.filter(e=>e.type==='expense' && e.date.startsWith(ym)).forEach(e=>{
-      const t = e.walletType || '未分類';
-      const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
-      agg[t] = (agg[t]||0)+amt;
-    });
-    const items = Object.entries(agg).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label:walletLabelWithIcon(label), value}));
-    return { kind:'single', items, styleClass:'neutral' };
-  }
   if(mode==='both'){
     if(level==='sub'){
       return { kind:'both', income: computeCategorySubItems('income'), expense: computeCategorySubItems('expense') };
@@ -1992,28 +2033,37 @@ function computeBreakdownData(mode, level){
   const items = Object.entries(agg).filter(([,v])=>v.total>0).sort((a,b)=>b[1].total-a[1].total).map(([label,v])=>({label:categoryLabelWithIcon(label), value:v.total}));
   return { kind:'single', items, styleClass: mode };
 }
-function renderBreakdownRows(items, styleClass, maxOverride){
+let breakdownCurrency = 'TWD';
+function renderBreakdownRows(items, styleClass, maxOverride, suffix){
   if(items.length===0) return '<div class="empty">本月尚無資料</div>';
   const max = maxOverride || Math.max(...items.map(i=>i.value));
   return items.map(it=>`
     <div class="bd-row">
-      <div class="bd-top"><span class="bd-label">${it.label}</span><span class="bd-amt mono">${it.value.toFixed(0)}</span></div>
+      <div class="bd-top"><span class="bd-label">${it.label}</span><span class="bd-amt mono">${it.value.toFixed(0)}${suffix||''}</span></div>
       <div class="bd-track"><div class="bd-fill ${styleClass}" style="width:${max>0?(it.value/max*100):0}%"></div></div>
     </div>`).join('');
 }
 function renderBreakdown(){
   const wrap = document.getElementById('breakdownView');
   if(!wrap) return;
+  const selArea = document.getElementById('breakdownCurrencySelectArea');
+  if(selArea){
+    selArea.innerHTML = buildCurrencySelectHtml('breakdownCurrencySelect', breakdownCurrency);
+    document.getElementById('breakdownCurrencySelect').onchange = (ev)=>{ breakdownCurrency = ev.target.value; renderBreakdown(); };
+  }
+  const suffix = currencyShortSuffix(breakdownCurrency);
+  const convItems = (arr)=> arr.map(it=>({ ...it, value: fromTWD(it.value, breakdownCurrency) }));
   const data = computeBreakdownData(breakdownMode, breakdownLevel);
   if(data.kind==='both'){
-    const maxAll = Math.max(1, ...data.income.map(i=>i.value), ...data.expense.map(i=>i.value));
+    const income = convItems(data.income), expense = convItems(data.expense);
+    const maxAll = Math.max(1, ...income.map(i=>i.value), ...expense.map(i=>i.value));
     let html = '<div class="breakdown-group-title">收入</div>';
-    html += data.income.length ? renderBreakdownRows(data.income,'income',maxAll) : '<div class="empty">本月尚無收入</div>';
+    html += income.length ? renderBreakdownRows(income,'income',maxAll,suffix) : '<div class="empty">本月尚無收入</div>';
     html += '<div class="breakdown-group-title">支出</div>';
-    html += data.expense.length ? renderBreakdownRows(data.expense,'expense',maxAll) : '<div class="empty">本月尚無支出</div>';
+    html += expense.length ? renderBreakdownRows(expense,'expense',maxAll,suffix) : '<div class="empty">本月尚無支出</div>';
     wrap.innerHTML = html;
   }else{
-    wrap.innerHTML = renderBreakdownRows(data.items, data.styleClass);
+    wrap.innerHTML = renderBreakdownRows(convItems(data.items), data.styleClass, null, suffix);
   }
 }
 document.querySelectorAll('#breakdownModeToggle button').forEach(btn=>{
@@ -2104,16 +2154,26 @@ function getPeriodBuckets(granularity, count){
 
 let reportMode = 'networth';
 let reportChartInstance = null;
+let reportCurrency = 'TWD';
 function renderReport(){
   const hintEl = document.getElementById('reportModeHint');
   const canvas = document.getElementById('reportChart');
   const barsEl = document.getElementById('reportBarsArea');
   const tableEl = document.getElementById('reportTableArea');
   const ctrlEl = document.getElementById('reportControlsArea');
+  const currSelArea = document.getElementById('reportCurrencySelectArea');
   if(!hintEl || !canvas) return;
   hintEl.textContent = ''; barsEl.innerHTML=''; tableEl.innerHTML=''; ctrlEl.innerHTML='';
   canvas.style.display = 'none'; canvas.style.height='0px'; canvas.style.width='0px'; canvas.removeAttribute('height');
   if(reportChartInstance){ reportChartInstance.destroy(); reportChartInstance=null; }
+  if(currSelArea){
+    if(reportMode==='savingsrate'){
+      currSelArea.innerHTML = '<span class="hint">（儲蓄率是百分比，不受幣值影響）</span>';
+    } else {
+      currSelArea.innerHTML = buildCurrencySelectHtml('reportCurrencySelect', reportCurrency);
+      document.getElementById('reportCurrencySelect').onchange = (ev)=>{ reportCurrency = ev.target.value; renderReport(); };
+    }
+  }
 
   const chartModes = ['networth','savingsrate','cumulative','stacked'];
   if(chartModes.includes(reportMode)){ canvas.style.display = 'block'; canvas.style.width=''; canvas.style.height=''; canvas.setAttribute('height','200'); }
@@ -2139,10 +2199,10 @@ const reportDetailsEl = document.getElementById('reportModeToggle') ? document.g
 if(reportDetailsEl) reportDetailsEl.addEventListener('toggle', ()=>{ if(reportDetailsEl.open) renderReport(); });
 
 function renderNetWorthChart(){
-  document.getElementById('reportModeHint').textContent = '過去 12 個月，每月底的淨資產（所有錢包加總，含負債）。';
+  document.getElementById('reportModeHint').textContent = `過去 12 個月，每月底的淨資產（所有錢包加總，含負債）${currencyShortSuffix(reportCurrency)}。`;
   if(typeof Chart==='undefined') return;
   const months = getMonthEndDates(12);
-  const data = months.map(m=> computeNetWorthAsOf(m.endDate));
+  const data = months.map(m=> fromTWD(computeNetWorthAsOf(m.endDate), reportCurrency));
   reportChartInstance = new Chart(document.getElementById('reportChart').getContext('2d'), {
     type:'line',
     data:{ labels: months.map(m=>m.label), datasets:[{ label:'淨資產', data, borderColor:getThemeColor('--gold')||'#C9A227', backgroundColor:'transparent', borderWidth:2.5, tension:0.3, pointRadius:3 }]},
@@ -2162,11 +2222,11 @@ function renderSavingsRateChart(){
   });
 }
 function renderCumulativeChart(){
-  document.getElementById('reportModeHint').textContent = '每月結餘（收入－支出）逐月累加，看整體資金走勢。';
+  document.getElementById('reportModeHint').textContent = `每月結餘（收入－支出）逐月累加，看整體資金走勢${currencyShortSuffix(reportCurrency)}。`;
   if(typeof Chart==='undefined') return;
   const series = computeSeries('month');
   let running = 0;
-  const data = series.labels.map((l,i)=>{ running += (series.income[i]-series.expense[i]); return running; });
+  const data = series.labels.map((l,i)=>{ running += (series.income[i]-series.expense[i]); return fromTWD(running, reportCurrency); });
   reportChartInstance = new Chart(document.getElementById('reportChart').getContext('2d'), {
     type:'line',
     data:{ labels: series.labels, datasets:[{ label:'累積結餘', data, borderColor:getThemeColor('--ink')||'#1D2A44', backgroundColor:'transparent', borderWidth:2.5, tension:0.3, pointRadius:3 }]},
@@ -2198,7 +2258,7 @@ function renderStackedCategoryChart(){
   };
 
   const granLabel = {day:'日',month:'月',year:'年'}[stackedGranularity];
-  document.getElementById('reportModeHint').textContent = `過去 ${stackedCount} 個${granLabel}，各支出類別金額堆疊比較。`;
+  document.getElementById('reportModeHint').textContent = `過去 ${stackedCount} 個${granLabel}，各支出類別金額堆疊比較${currencyShortSuffix(reportCurrency)}。`;
   if(typeof Chart==='undefined') return;
   const buckets = getPeriodBuckets(stackedGranularity, stackedCount);
   const palette = ['#1D2A44','#C9A227','#B23A34','#4C7A5C','#8A96A8','#7C5C3E','#5C6B85','#A6785C','#6E8B74','#B08D57'];
@@ -2207,7 +2267,7 @@ function renderStackedCategoryChart(){
     label:t,
     data: buckets.map(b=>{
       const agg = aggCategoryForRange('expense', b.startDate, b.endDate);
-      return agg[t]||0;
+      return fromTWD(agg[t]||0, reportCurrency);
     }),
     backgroundColor: palette[i%palette.length]
   })).filter(ds => ds.data.some(v=>v>0));
@@ -2219,7 +2279,7 @@ function renderStackedCategoryChart(){
   });
 }
 function renderAllocationBars(){
-  document.getElementById('reportModeHint').textContent = '目前資產在各錢包類型的佔比。';
+  document.getElementById('reportModeHint').textContent = `目前資產在各錢包類型的佔比${currencyShortSuffix(reportCurrency)}。`;
   const balances = computeWalletBalancesAsOfTWD(todayLocal());
   const items = Object.entries(balances).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
   const barsEl = document.getElementById('reportBarsArea');
@@ -2228,7 +2288,7 @@ function renderAllocationBars(){
   const max = Math.max(...items.map(([,v])=>v));
   barsEl.innerHTML = items.map(([label,v])=>`
     <div class="bd-row">
-      <div class="bd-top"><span class="bd-label">${walletTypeIcon(label)}${label}</span><span class="bd-amt mono">${v.toFixed(0)}（${(v/total*100).toFixed(1)}%）</span></div>
+      <div class="bd-top"><span class="bd-label">${walletTypeIcon(label)}${label}</span><span class="bd-amt mono">${fromTWD(v,reportCurrency).toFixed(0)}${currencyShortSuffix(reportCurrency)}（${(v/total*100).toFixed(1)}%）</span></div>
       <div class="bd-track"><div class="bd-fill neutral" style="width:${(v/max*100)}%"></div></div>
     </div>`).join('');
 }
@@ -2253,11 +2313,11 @@ function renderCompareTable(){
   document.getElementById('compareMonthBInput').onchange = (ev)=>{ if(ev.target.value){ compareMonthB = ev.target.value; renderCompareTable(); } };
 
   const prevYm = compareMonthA, thisYm = compareMonthB;
-  document.getElementById('reportModeHint').textContent = `${monthLabel(prevYm)} vs ${monthLabel(thisYm)}，各支出類別對比。`;
+  document.getElementById('reportModeHint').textContent = `${monthLabel(prevYm)} vs ${monthLabel(thisYm)}，各支出類別對比${currencyShortSuffix(reportCurrency)}。`;
   const thisAgg = aggCategoryForMonth('expense', thisYm);
   const prevAgg = aggCategoryForMonth('expense', prevYm);
   const allTypes = [...new Set([...Object.keys(thisAgg), ...Object.keys(prevAgg)])];
-  const rows = allTypes.map(t=>({ type:t, prev: prevAgg[t]||0, cur: thisAgg[t]||0 }))
+  const rows = allTypes.map(t=>({ type:t, prev: fromTWD(prevAgg[t]||0,reportCurrency), cur: fromTWD(thisAgg[t]||0,reportCurrency) }))
     .filter(r=>r.prev>0||r.cur>0).sort((a,b)=>b.cur-a.cur);
   const tableEl = document.getElementById('reportTableArea');
   if(rows.length===0){ tableEl.innerHTML='<div class="empty">兩個月都尚無支出資料</div>'; return; }
@@ -2310,7 +2370,7 @@ function renderTopExpenseList(){
   else if(topExpenseGranularity==='year'){ startDate = topExpenseYear+'-01-01'; endDate = topExpenseYear+'-12-31'; periodLabel = topExpenseYear+'年'; }
   else { const [yy,mm] = topExpenseMonth.split('-').map(Number); const endD = new Date(yy,mm,0); startDate = topExpenseMonth+'-01'; endDate = dateToLocalYMD(endD); periodLabel = monthLabel(topExpenseMonth); }
 
-  document.getElementById('reportModeHint').textContent = `${periodLabel} 金額最大的支出紀錄（最多列 10 筆）。`;
+  document.getElementById('reportModeHint').textContent = `${periodLabel} 金額最大的支出紀錄（最多列 10 筆）${currencyShortSuffix(reportCurrency)}。`;
   const items = entries.filter(e=>e.type==='expense' && e.date>=startDate && e.date<=endDate)
     .map(e=>({ ...e, twd: (typeof e.twdAmount==='number')?e.twdAmount:toTWD(e.amount,e.currency) }))
     .sort((a,b)=>b.twd-a.twd).slice(0,10);
@@ -2318,7 +2378,7 @@ function renderTopExpenseList(){
   if(items.length===0){ tableEl.innerHTML='<div class="empty">這個區間尚無支出資料</div>'; return; }
   tableEl.innerHTML = items.map((e,i)=>`
     <div class="bd-row">
-      <div class="bd-top"><span class="bd-label">${i+1}. ${categoryLabelWithIcon(e.categoryType,e.categorySub)}${e.note?' · '+e.note:''}</span><span class="bd-amt mono">${e.twd.toFixed(0)}</span></div>
+      <div class="bd-top"><span class="bd-label">${i+1}. ${categoryLabelWithIcon(e.categoryType,e.categorySub)}${e.note?' · '+e.note:''}</span><span class="bd-amt mono">${fromTWD(e.twd,reportCurrency).toFixed(0)}</span></div>
     </div>`).join('');
 }
 let weekdayStartDate = '';
@@ -2337,7 +2397,7 @@ function renderWeekdayBars(){
   document.getElementById('weekdayResetBtn').onclick = ()=>{ weekdayStartDate=''; weekdayEndDate=''; renderWeekdayBars(); };
 
   const rangeText = (weekdayStartDate||weekdayEndDate) ? `${weekdayStartDate||'最早'} ～ ${weekdayEndDate||'最新'}` : '全部歷史';
-  document.getElementById('reportModeHint').textContent = `${rangeText}的支出，依星期幾加總（看消費習慣）。`;
+  document.getElementById('reportModeHint').textContent = `${rangeText}的支出，依星期幾加總（看消費習慣）${currencyShortSuffix(reportCurrency)}。`;
   const labels = ['週日','週一','週二','週三','週四','週五','週六'];
   const sums = [0,0,0,0,0,0,0];
   entries.filter(e=> e.type==='expense'
@@ -2348,7 +2408,7 @@ function renderWeekdayBars(){
     const amt = (typeof e.twdAmount==='number')?e.twdAmount:toTWD(e.amount,e.currency);
     sums[d.getDay()] += amt;
   });
-  const items = labels.map((l,i)=>({label:l, value:sums[i]}));
+  const items = labels.map((l,i)=>({label:l, value:fromTWD(sums[i],reportCurrency)}));
   const barsEl = document.getElementById('reportBarsArea');
   const max = Math.max(...items.map(i=>i.value), 1);
   barsEl.innerHTML = items.map(it=>`
@@ -2358,9 +2418,76 @@ function renderWeekdayBars(){
     </div>`).join('');
 }
 
+let catStatsGranularity = 'month'; // 'month' 跟隨頁面上方共用的月份選擇器；'year'/'range' 各自獨立
+let catStatsYear = null;
+let catStatsRangeStart = '';
+let catStatsRangeEnd = '';
+let catStatsCurrency = 'TWD';
+function getCatStatsRange(){
+  if(catStatsGranularity==='year'){
+    if(!catStatsYear) catStatsYear = String(new Date(todayLocal()+'T00:00:00').getFullYear());
+    return { start: catStatsYear+'-01-01', end: catStatsYear+'-12-31', label: catStatsYear+'年' };
+  }
+  if(catStatsGranularity==='range'){
+    const start = catStatsRangeStart || '0000-01-01';
+    const end = catStatsRangeEnd || '9999-12-31';
+    const label = (catStatsRangeStart||catStatsRangeEnd) ? `${catStatsRangeStart||'最早'} ～ ${catStatsRangeEnd||'最新'}` : '全部區間';
+    return { start, end, label };
+  }
+  const ym = getStatsMonth();
+  const [y,m] = ym.split('-').map(Number);
+  const endD = new Date(y, m, 0);
+  return { start: ym+'-01', end: dateToLocalYMD(endD), label: monthLabel(ym) };
+}
+function renderCatStatsControls(){
+  const ctrlEl = document.getElementById('catStatsControlsArea');
+  if(!ctrlEl) return;
+  let extraHtml = '';
+  if(catStatsGranularity==='year'){
+    extraHtml = `<input type="number" id="catStatsYearInput" value="${catStatsYear||new Date(todayLocal()+'T00:00:00').getFullYear()}" style="max-width:90px;margin-left:8px;" min="2000" max="2100">`;
+  } else if(catStatsGranularity==='range'){
+    extraHtml = `<span style="margin-left:8px;">
+      <input type="date" id="catStatsRangeStartInput" value="${catStatsRangeStart}" style="max-width:130px;">
+      <span class="hint" style="margin:0;">～</span>
+      <input type="date" id="catStatsRangeEndInput" value="${catStatsRangeEnd}" style="max-width:130px;">
+    </span>`;
+  }
+  ctrlEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;">
+      <div class="chip-group" id="catStatsGranToggle">
+        <button data-gran="month" class="${catStatsGranularity==='month'?'on':''}">本月</button>
+        <button data-gran="year" class="${catStatsGranularity==='year'?'on':''}">全年</button>
+        <button data-gran="range" class="${catStatsGranularity==='range'?'on':''}">區間</button>
+      </div>
+      ${extraHtml}
+      ${buildCurrencySelectHtml('catStatsCurrencySelect', catStatsCurrency)}
+    </div>`;
+  document.querySelectorAll('#catStatsGranToggle button').forEach(btn=>{
+    btn.onclick = ()=>{ catStatsGranularity = btn.dataset.gran; renderCategorySection(); };
+  });
+  const yearInp = document.getElementById('catStatsYearInput');
+  if(yearInp) yearInp.onchange = (ev)=>{
+    const v = parseInt(ev.target.value,10);
+    catStatsYear = String(Math.max(2000, Math.min(2100, isNaN(v)?new Date().getFullYear():v)));
+    renderCategorySection();
+  };
+  const rs = document.getElementById('catStatsRangeStartInput');
+  if(rs) rs.onchange = (ev)=>{ catStatsRangeStart = ev.target.value; renderCategorySection(); };
+  const re = document.getElementById('catStatsRangeEndInput');
+  if(re) re.onchange = (ev)=>{ catStatsRangeEnd = ev.target.value; renderCategorySection(); };
+  document.getElementById('catStatsCurrencySelect').onchange = (ev)=>{ catStatsCurrency = ev.target.value; renderCategorySection(); };
+}
 function renderCategorySection(){
-  const agg = computeMonthCategoryAgg(categoryStatMode);
-  renderCategoryAccordion(agg, categoryStatMode);
+  const range = getCatStatsRange();
+  document.getElementById('catStatsTitle').textContent = `${range.label} 分類統計`;
+  renderCatStatsControls();
+  const agg = computeCategoryAggForRange(categoryStatMode, range.start, range.end);
+  const convAgg = {};
+  Object.entries(agg).forEach(([t,d])=>{
+    convAgg[t] = { total: fromTWD(d.total, catStatsCurrency), subs: {} };
+    Object.entries(d.subs).forEach(([s,v])=>{ convAgg[t].subs[s] = fromTWD(v, catStatsCurrency); });
+  });
+  renderCategoryAccordion(convAgg, categoryStatMode, catStatsCurrency);
 }
 document.querySelectorAll('#catModeToggle button').forEach(btn=>{
   btn.onclick = ()=>{
@@ -2396,13 +2523,21 @@ function computeSeries(granularity){
   return { labels:keys, income:keys.map(k=>buckets[k].income), expense:keys.map(k=>buckets[k].expense) };
 }
 
+let lineCurrency = 'TWD';
 function renderLineChart(){
   const canvas = document.getElementById('lineChart');
   const emptyEl = document.getElementById('lineChartEmpty');
   const tableEl = document.getElementById('lineChartTable');
+  const selArea = document.getElementById('lineCurrencySelectArea');
+  if(selArea){
+    selArea.innerHTML = buildCurrencySelectHtml('lineCurrencySelect', lineCurrency);
+    document.getElementById('lineCurrencySelect').onchange = (ev)=>{ lineCurrency = ev.target.value; renderLineChart(); };
+  }
   if(typeof Chart==='undefined'){ if(canvas) canvas.style.display='none'; if(emptyEl){ emptyEl.style.display='block'; emptyEl.textContent='圖表元件載入中，請稍候或檢查網路連線'; } tableEl.innerHTML=''; return; }
-  const series = computeSeries(lineGranularity);
-  if(series.labels.length===0){ canvas.style.display='none'; emptyEl.style.display='block'; emptyEl.textContent='尚無資料可統計'; tableEl.innerHTML=''; return; }
+  const rawSeries = computeSeries(lineGranularity);
+  if(rawSeries.labels.length===0){ canvas.style.display='none'; emptyEl.style.display='block'; emptyEl.textContent='尚無資料可統計'; tableEl.innerHTML=''; return; }
+  const series = { labels: rawSeries.labels, income: rawSeries.income.map(v=>fromTWD(v,lineCurrency)), expense: rawSeries.expense.map(v=>fromTWD(v,lineCurrency)) };
+  const suffix = currencyShortSuffix(lineCurrency);
   canvas.style.display='block'; emptyEl.style.display='none';
   if(lineChartInstance) lineChartInstance.destroy();
   const incomeColor = getThemeColor('--stamp-green') || '#4C7A5C';
@@ -2434,7 +2569,7 @@ function renderLineChart(){
   });
   const showIncome = lineSeries==='both' || lineSeries==='income';
   const showExpense = lineSeries==='both' || lineSeries==='expense';
-  tableEl.innerHTML = `<table class="line-table"><thead><tr><th>期間</th>${showIncome?'<th>收入</th>':''}${showExpense?'<th>支出</th>':''}</tr></thead><tbody>
+  tableEl.innerHTML = `<table class="line-table"><thead><tr><th>期間</th>${showIncome?`<th>收入${suffix}</th>`:''}${showExpense?`<th>支出${suffix}</th>`:''}</tr></thead><tbody>
     ${series.labels.map((l,i)=>`<tr><td>${l}</td>${showIncome?`<td class="mono">${series.income[i].toFixed(0)}</td>`:''}${showExpense?`<td class="mono">${series.expense[i].toFixed(0)}</td>`:''}</tr>`).join('')}
   </tbody></table>`;
 }
@@ -2483,23 +2618,27 @@ function renderDayCount(){
     }
   }
 
-  if(config.startDate){
-    areaEl.innerHTML = `<span class="hint">記帳起始日：${config.startDate}（<span id="resetStartDate" style="text-decoration:underline;cursor:pointer;">重新設定</span>）</span>`;
-    document.getElementById('resetStartDate').onclick = ()=>{
-      if(!confirm('確定要重新設定記帳起始日嗎？會直接從今天重新算「第一天」，同時也會讓你可以重新抽一次今天狂小語。')) return;
-      config.startDate = todayLocal();
-      saveConfig();
-      forceNewQuoteDraw().then(()=> renderDayCount());
-    };
-  } else {
-    areaEl.innerHTML = `<input type="date" id="startDateInput" style="max-width:200px;margin:0 auto;display:block;">`;
-    document.getElementById('startDateInput').onchange = (ev)=>{
-      const val = ev.target.value;
+  const currentStart = config.startDate || getEarliestEntryDate() || todayLocal();
+  if(startDateEditMode){
+    areaEl.innerHTML = `<div class="hint" style="display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;">
+      <span>記帳起始日：</span>
+      <input type="date" id="startDateInput" value="${currentStart}" style="max-width:150px;">
+      <span id="confirmStartDateBtn" style="text-decoration:underline;cursor:pointer;color:var(--gold);">確定</span>
+      <span id="cancelStartDateBtn" style="text-decoration:underline;cursor:pointer;">取消</span>
+    </div>`;
+    document.getElementById('confirmStartDateBtn').onclick = ()=>{
+      const val = document.getElementById('startDateInput').value;
       if(!val) return;
+      if(!confirm(`確定要把記帳起始日改成 ${val} 嗎？會重新計算天數，也會讓你可以重新抽一次今天狂小語。`)) return;
       config.startDate = val;
       saveConfig();
-      renderDayCount();
+      startDateEditMode = false;
+      forceNewQuoteDraw().then(()=> renderDayCount());
     };
+    document.getElementById('cancelStartDateBtn').onclick = ()=>{ startDateEditMode = false; renderDayCount(); };
+  } else {
+    areaEl.innerHTML = `<div class="hint">記帳起始日：${currentStart}（<span id="editStartDateBtn" style="text-decoration:underline;cursor:pointer;">重置起始日</span>）</div>`;
+    document.getElementById('editStartDateBtn').onclick = ()=>{ startDateEditMode = true; renderDayCount(); };
   }
 }
 
@@ -2514,7 +2653,6 @@ function renderMonthSelector(){
   const isCurrent = !selectedStatsMonth;
   document.getElementById('monthResetHint').style.display = isCurrent ? 'none' : 'block';
   document.getElementById('statIncomeExpenseTitle').textContent = `${monthLabel(ym)} 收支`;
-  document.getElementById('catStatsTitle').textContent = `${monthLabel(ym)} 分類統計`;
   document.getElementById('breakdownTitle').textContent = `分類細分（${monthLabel(ym)}）`;
 }
 function shiftStatsMonth(delta){
@@ -2742,7 +2880,10 @@ document.getElementById('saveBtn').onclick = ()=>{
 document.getElementById('addCurr').onclick = ()=>{
   const inp = document.getElementById('newCurr');
   const resolved = resolveCurrencyInput(inp.value);
-  if(!resolved){ alert('目前的清單裡沒有這個名稱（已涵蓋大部分國家），可以直接輸入三碼貨幣代號（例如日本是 JPY，可以上網查「國家 貨幣代號」）'); return; }
+  if(!resolved){
+    addCustomCurrency(inp.value);
+    return;
+  }
   if(config.currencies.includes(resolved.code)){ inp.value=''; alert('這個貨幣已經加過了'); return; }
   config.currencies.push(resolved.code);
   config.currencyMeta[resolved.code] = { name: resolved.name, rate: DEFAULT_SEED_RATES[resolved.code]||1, updatedAt:null, source:'default' };
@@ -2750,6 +2891,37 @@ document.getElementById('addCurr').onclick = ()=>{
   saveConfig(); renderTags(); fillSelects();
   fetchExchangeRates(false).then(()=>{ renderTags(); updateCurrencyNote(); });
 };
+function generateCustomCurrencyCode(){
+  let i = 1;
+  while(config.currencies.includes('CUST'+i)) i++;
+  return 'CUST'+i;
+}
+function addCustomCurrency(rawInput){
+  if(!confirm(`目前的清單裡沒有「${rawInput.trim()}」這個名稱（已涵蓋大部分國家）。\n\n要不要手動新增這個貨幣？系統會試著自動抓匯率，如果抓不到，就要你自己輸入、之後也要自己更新。\n\n如果這是一個常見國家，也歡迎聯繫製作人 Ger 幫忙正式加入支援。`)) return;
+  const customName = window.prompt('請輸入這個貨幣的顯示名稱（例如：越南盾）：', rawInput.trim());
+  if(!customName || !customName.trim()) return;
+  let customCode = window.prompt('（可留空）如果知道正式的三碼貨幣代號可以輸入，這樣系統比較有機會自動抓到匯率；不知道就直接留空，按確定：');
+  if(customCode===null) return;
+  customCode = customCode.trim().toUpperCase().replace(/[^A-Z]/g,'');
+  if(!customCode) customCode = generateCustomCurrencyCode();
+  if(config.currencies.includes(customCode)){ alert('這個代號已經用過了，換一個名稱重新新增一次'); return; }
+  const rateStr = window.prompt('請輸入 1 單位這個貨幣約等於多少新台幣（例如輸入 30 代表 1 單位＝30元台幣）：');
+  const rate = parseFloat(rateStr);
+  if(isNaN(rate) || rate<=0){ alert('金額格式不對，新增失敗'); return; }
+  config.currencies.push(customCode);
+  config.currencyMeta[customCode] = { name: customName.trim(), rate, updatedAt:null, source:'manual' };
+  document.getElementById('newCurr').value = '';
+  saveConfig(); renderTags(); fillSelects();
+  fetchExchangeRates(false).then(ok=>{
+    renderTags(); updateCurrencyNote();
+    const gotAuto = ok && config.currencyMeta[customCode] && config.currencyMeta[customCode].source==='auto';
+    if(gotAuto){
+      alert(`已新增「${customName.trim()}」，而且系統成功抓到即時匯率，之後會自動更新。`);
+    }else{
+      alert(`已新增「${customName.trim()}」。系統目前抓不到這個代號的即時匯率，之後要自己回來手動更新（清單上會標註）；如果之後想要系統正式支援這個國家，歡迎聯繫製作人 Ger。`);
+    }
+  });
+}
 
 document.getElementById('refreshRatesBtn').onclick = async ()=>{
   const statusEl = document.getElementById('rateUpdateStatus');
