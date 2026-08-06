@@ -62,15 +62,15 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 .breakdown-group-title:first-child{margin-top:0;}
 .bd-row{margin-bottom:14px;}
 .bd-row .bd-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;}
-.bd-row .bd-label{font-size:13px;}
-.bd-row .bd-amt{font-size:13px;font-weight:700;}
+.bd-row .bd-label{font-size:14px;}
+.bd-row .bd-amt{font-size:14px;font-weight:700;}
 .bd-track{height:9px;border-radius:5px;background:var(--paper);overflow:hidden;}
 .bd-fill{height:100%;border-radius:5px;transition:width .5s ease;}
 .bd-fill.expense{background:linear-gradient(90deg,#D6847C,var(--stamp-red));}
 .bd-fill.income{background:linear-gradient(90deg,#8FB89A,var(--stamp-green));}
 .bd-fill.neutral{background:linear-gradient(90deg,#DFC066,var(--gold));}
-.line-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:11px;}
-.line-table th, .line-table td{padding:4px 6px;text-align:right;border-bottom:1px dotted var(--paper-line);}
+.line-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+.line-table th, .line-table td{padding:6px 8px;text-align:right;border-bottom:1px dotted var(--paper-line);}
 .line-table th:first-child, .line-table td:first-child{text-align:left;}
 .mini-calc-wrap{margin:-6px 0 12px;}
 .mini-calc-wrap summary{font-size:12px;color:var(--ink-soft);cursor:pointer;list-style:none;padding:4px 0;}
@@ -2111,11 +2111,12 @@ function renderReport(){
   const tableEl = document.getElementById('reportTableArea');
   const ctrlEl = document.getElementById('reportControlsArea');
   if(!hintEl || !canvas) return;
-  hintEl.textContent = ''; canvas.style.display = 'none'; barsEl.innerHTML=''; tableEl.innerHTML=''; ctrlEl.innerHTML='';
+  hintEl.textContent = ''; barsEl.innerHTML=''; tableEl.innerHTML=''; ctrlEl.innerHTML='';
+  canvas.style.display = 'none'; canvas.style.height='0px'; canvas.style.width='0px'; canvas.removeAttribute('height');
   if(reportChartInstance){ reportChartInstance.destroy(); reportChartInstance=null; }
 
   const chartModes = ['networth','savingsrate','cumulative','stacked'];
-  if(chartModes.includes(reportMode)) canvas.style.display = 'block';
+  if(chartModes.includes(reportMode)){ canvas.style.display = 'block'; canvas.style.width=''; canvas.style.height=''; canvas.setAttribute('height','200'); }
 
   if(reportMode==='networth') renderNetWorthChart();
   else if(reportMode==='savingsrate') renderSavingsRateChart();
@@ -2269,20 +2270,52 @@ function renderCompareTable(){
     }).join('')}
   </tbody></table>`;
 }
+let topExpenseGranularity = 'month';
 let topExpenseMonth = null;
+let topExpenseDay = null;
+let topExpenseYear = null;
 function renderTopExpenseList(){
   if(!topExpenseMonth) topExpenseMonth = getStatsMonth();
-  const ctrlEl = document.getElementById('reportControlsArea');
-  ctrlEl.innerHTML = `<div style="text-align:center;"><input type="month" id="topExpenseMonthInput" value="${topExpenseMonth}" style="max-width:140px;"></div>`;
-  document.getElementById('topExpenseMonthInput').onchange = (ev)=>{ if(ev.target.value){ topExpenseMonth = ev.target.value; renderTopExpenseList(); } };
+  if(!topExpenseDay) topExpenseDay = todayLocal();
+  if(!topExpenseYear) topExpenseYear = String(new Date(todayLocal()+'T00:00:00').getFullYear());
 
-  const ym = topExpenseMonth;
-  document.getElementById('reportModeHint').textContent = `${monthLabel(ym)} 金額最大的支出紀錄（最多列 10 筆）。`;
-  const items = entries.filter(e=>e.type==='expense' && e.date.startsWith(ym))
+  const ctrlEl = document.getElementById('reportControlsArea');
+  const periodInputHtml = topExpenseGranularity==='day'
+    ? `<input type="date" id="topExpensePeriodInput" value="${topExpenseDay}" style="max-width:150px;">`
+    : topExpenseGranularity==='year'
+    ? `<input type="number" id="topExpensePeriodInput" value="${topExpenseYear}" style="max-width:90px;" min="2000" max="2100">`
+    : `<input type="month" id="topExpensePeriodInput" value="${topExpenseMonth}" style="max-width:140px;">`;
+  ctrlEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;">
+      <div class="chip-group" id="topExpenseGranToggle">
+        <button data-gran="day" class="${topExpenseGranularity==='day'?'on':''}">日</button>
+        <button data-gran="month" class="${topExpenseGranularity==='month'?'on':''}">月</button>
+        <button data-gran="year" class="${topExpenseGranularity==='year'?'on':''}">年</button>
+      </div>
+      ${periodInputHtml}
+    </div>`;
+  document.querySelectorAll('#topExpenseGranToggle button').forEach(btn=>{
+    btn.onclick = ()=>{ topExpenseGranularity = btn.dataset.gran; renderTopExpenseList(); };
+  });
+  document.getElementById('topExpensePeriodInput').onchange = (ev)=>{
+    if(!ev.target.value) return;
+    if(topExpenseGranularity==='day') topExpenseDay = ev.target.value;
+    else if(topExpenseGranularity==='year') topExpenseYear = String(Math.max(2000, Math.min(2100, parseInt(ev.target.value,10)||new Date().getFullYear())));
+    else topExpenseMonth = ev.target.value;
+    renderTopExpenseList();
+  };
+
+  let startDate, endDate, periodLabel;
+  if(topExpenseGranularity==='day'){ startDate = endDate = topExpenseDay; periodLabel = topExpenseDay; }
+  else if(topExpenseGranularity==='year'){ startDate = topExpenseYear+'-01-01'; endDate = topExpenseYear+'-12-31'; periodLabel = topExpenseYear+'年'; }
+  else { const [yy,mm] = topExpenseMonth.split('-').map(Number); const endD = new Date(yy,mm,0); startDate = topExpenseMonth+'-01'; endDate = dateToLocalYMD(endD); periodLabel = monthLabel(topExpenseMonth); }
+
+  document.getElementById('reportModeHint').textContent = `${periodLabel} 金額最大的支出紀錄（最多列 10 筆）。`;
+  const items = entries.filter(e=>e.type==='expense' && e.date>=startDate && e.date<=endDate)
     .map(e=>({ ...e, twd: (typeof e.twdAmount==='number')?e.twdAmount:toTWD(e.amount,e.currency) }))
     .sort((a,b)=>b.twd-a.twd).slice(0,10);
   const tableEl = document.getElementById('reportTableArea');
-  if(items.length===0){ tableEl.innerHTML='<div class="empty">該月尚無支出資料</div>'; return; }
+  if(items.length===0){ tableEl.innerHTML='<div class="empty">這個區間尚無支出資料</div>'; return; }
   tableEl.innerHTML = items.map((e,i)=>`
     <div class="bd-row">
       <div class="bd-top"><span class="bd-label">${i+1}. ${categoryLabelWithIcon(e.categoryType,e.categorySub)}${e.note?' · '+e.note:''}</span><span class="bd-amt mono">${e.twd.toFixed(0)}</span></div>
