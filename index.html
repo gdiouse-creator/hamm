@@ -371,6 +371,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
             <button data-report="compare">月對月比較</button>
             <button data-report="topexpense">支出排行</button>
             <button data-report="weekday">星期消費</button>
+            <button data-report="correctioncount">補正次數</button>
           </div>
           <div style="text-align:center;margin-top:6px;" id="reportCurrencySelectArea"></div>
           <p class="hint" id="reportModeHint" style="margin:10px 0 0;"></p>
@@ -440,6 +441,9 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
           <div class="field"><label>錢包明細</label><div class="select-add"><select id="fCalSub"></select><span class="mini-plus" id="addCalSubInline">+</span></div></div>
         </div>
         <div class="currency-note" id="fCalBalanceNote"></div>
+        <label class="hint" style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer;">
+          <input type="checkbox" id="fCalIsSetup" style="width:auto;">這是最初設定家底（不是事後補正錯誤）
+        </label>
       </div>
 
       <div class="field"><label>備註</label><input type="text" id="fNote" placeholder="選填"></div>
@@ -1119,6 +1123,10 @@ function migrateEntries(){
     }
     if(typeof e.twdAmount !== 'number'){
       e.twdAmount = toTWD(e.amount, e.currency||'TWD');
+      changed = true;
+    }
+    if(e.type==='calibration' && e.calibrationKind!=='setup' && e.calibrationKind!=='correction'){
+      e.calibrationKind = 'correction'; // 舊資料沒分過類的，預設當成「補正」，比較保守（不會誤判成初始設定而被排除在補正統計外）
       changed = true;
     }
   });
@@ -2169,6 +2177,8 @@ function renderReport(){
   if(currSelArea){
     if(reportMode==='savingsrate'){
       currSelArea.innerHTML = '<span class="hint">（儲蓄率是百分比，不受幣值影響）</span>';
+    } else if(reportMode==='correctioncount'){
+      currSelArea.innerHTML = '<span class="hint">（次數統計，不受幣值影響）</span>';
     } else {
       currSelArea.innerHTML = buildCurrencySelectHtml('reportCurrencySelect', reportCurrency);
       document.getElementById('reportCurrencySelect').onchange = (ev)=>{ reportCurrency = ev.target.value; renderReport(); };
@@ -2186,6 +2196,7 @@ function renderReport(){
   else if(reportMode==='compare') renderCompareTable();
   else if(reportMode==='topexpense') renderTopExpenseList();
   else if(reportMode==='weekday') renderWeekdayBars();
+  else if(reportMode==='correctioncount') renderCorrectionCountBars();
 }
 document.querySelectorAll('#reportModeToggle button').forEach(btn=>{
   btn.onclick = ()=>{
@@ -2210,7 +2221,7 @@ function renderNetWorthChart(){
   });
 }
 function renderSavingsRateChart(){
-  document.getElementById('reportModeHint').textContent = '每月「(收入－支出)÷收入」的儲蓄率，收入為 0 的月份不計算。';
+  document.getElementById('reportModeHint').textContent = '每月「(收入－支出)÷收入」的儲蓄率，收入為 0 的月份不計算。只看當月實際收支，不受校正（不管是最初設定或後續補正）影響——校正代表的資產變化，交給「淨資產趨勢」呈現。';
   if(typeof Chart==='undefined') return;
   const series = computeSeries('month');
   const labels=[], data=[];
@@ -2414,6 +2425,24 @@ function renderWeekdayBars(){
   barsEl.innerHTML = items.map(it=>`
     <div class="bd-row">
       <div class="bd-top"><span class="bd-label">${it.label}</span><span class="bd-amt mono">${it.value.toFixed(0)}</span></div>
+      <div class="bd-track"><div class="bd-fill expense" style="width:${(it.value/max*100)}%"></div></div>
+    </div>`).join('');
+}
+function renderCorrectionCountBars(){
+  document.getElementById('reportModeHint').textContent = '過去 12 個月，每月「補正」次數（不含最初設定家底那種校正）。次數越少，代表當下記帳越準確、越少要事後補救。';
+  const months = getMonthEndDates(12);
+  const counts = months.map(m=> entries.filter(e=>e.type==='calibration' && e.calibrationKind==='correction' && e.date.startsWith(m.label)).length);
+  const items = months.map((m,i)=>({ label:m.label, value:counts[i] }));
+  const barsEl = document.getElementById('reportBarsArea');
+  const max = Math.max(...items.map(i=>i.value), 1);
+  const totalCorrections = counts.reduce((a,b)=>a+b,0);
+  const totalNormalEntries = entries.filter(e=>e.type==='expense'||e.type==='income').length;
+  const ratioText = totalNormalEntries>0
+    ? `過去 12 個月共補正 ${totalCorrections} 次，平均每 ${(totalNormalEntries/Math.max(totalCorrections,1)).toFixed(0)} 筆一般紀錄才需要補正一次。`
+    : `過去 12 個月共補正 ${totalCorrections} 次。`;
+  barsEl.innerHTML = `<p class="hint" style="margin-top:0;">${ratioText}</p>` + items.map(it=>`
+    <div class="bd-row">
+      <div class="bd-top"><span class="bd-label">${it.label}</span><span class="bd-amt mono">${it.value} 次</span></div>
       <div class="bd-track"><div class="bd-fill expense" style="width:${(it.value/max*100)}%"></div></div>
     </div>`).join('');
 }
@@ -2798,6 +2827,7 @@ function startEditEntry(id){
     document.getElementById('fCalType').value = e.walletType;
     fillSubSelect('fCalType','fCalSub',config.walletSubs, walletSubIcon);
     document.getElementById('fCalSub').value = e.walletSub || '';
+    document.getElementById('fCalIsSetup').checked = e.calibrationKind==='setup';
     refreshCalBalanceNote();
   }else{
     document.getElementById('fAmount').value = e.amount;
@@ -2833,7 +2863,8 @@ document.getElementById('saveBtn').onclick = ()=>{
       id: editingId || (Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
       type:'calibration', date:dateVal, time:timeVal,
       walletType:type, walletSub:sub, currency:currencyVal,
-      targetAmount: target, delta, note: noteVal
+      targetAmount: target, delta, note: noteVal,
+      calibrationKind: document.getElementById('fCalIsSetup').checked ? 'setup' : 'correction'
     };
   }else{
     const base = {
@@ -2872,6 +2903,7 @@ document.getElementById('saveBtn').onclick = ()=>{
   document.getElementById('fAmount').value='';
   document.getElementById('fLocation').value='';
   document.getElementById('fNote').value='';
+  document.getElementById('fCalIsSetup').checked = false;
   refreshNow();
   updateCurrencyNote();
   refreshWalletBalanceNotes();
@@ -2944,7 +2976,7 @@ async function exportData(){
   const todayStr = todayLocal();
   const exportConfig = { ...config, lastExportAt: todayStr };
   const payload = { exportedAt: new Date().toISOString(), entries, config: exportConfig };
-  const filename = `ledger-backup-${todayLocal()}.json`;
+  const filename = `狂記帳數據存檔-不確定請勿刪除-${todayLocal()}.json`;
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
   if(navigator.share && navigator.canShare){
     try{
@@ -3032,7 +3064,7 @@ function decodeFileBuffer(buffer){
 function exportCSV(){
   const rows = entries.map(e => CSV_COLUMNS.map(c=>csvEscape(e[c])).join(','));
   const csv = [CSV_COLUMNS.join(','), ...rows].join('\r\n');
-  const filename = `ledger-backup-${todayLocal()}.csv`;
+  const filename = `狂記帳數據存檔-不確定請勿刪除-${todayLocal()}.csv`;
   const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
