@@ -371,7 +371,6 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
             <button data-report="compare">月對月比較</button>
             <button data-report="topexpense">支出排行</button>
             <button data-report="weekday">星期消費</button>
-            <button data-report="correctioncount">補正次數</button>
           </div>
           <div style="text-align:center;margin-top:6px;" id="reportCurrencySelectArea"></div>
           <p class="hint" id="reportModeHint" style="margin:10px 0 0;"></p>
@@ -640,41 +639,63 @@ function thisMonthLocal(){ const d = new Date(); return `${d.getFullYear()}-${St
 
 // 記帳小語：不放在系統裡管理，改成讀取旁邊那份 quotes.json 檔案，以後要換句子直接改那個檔案就好，不用動這裡。
 // 每天固定顯示同一句（用日期算出一個固定的索引），不是每次重新整理就換一句；quotes.json 抓不到時用這組保底句子。
-const FALLBACK_QUOTES = ["每一筆記錄，都是為未來的自己留下線索。","持續記帳，是對自己最溫柔的誠實。"];
+//
+// quotes.json 格式：每一句都帶一個固定的 id，「已經抽過」的紀錄是比對 id，不是比對文字內容——
+// 這樣以後你修改某一句的用字（哪怕只是改標點），也不會被誤判成「這是新的一句、還沒抽過」，判斷更準、風險更低。
+// 舊版quotes.json（純文字陣列，沒有id）也相容，會自動用陣列位置當id頂著用。
+const FALLBACK_QUOTES = [
+  { id:'fallback-1', text:"每一筆記錄，都是為未來的自己留下線索。" },
+  { id:'fallback-2', text:"持續記帳，是對自己最溫柔的誠實。" }
+];
 let remoteQuotes = [];
+function getQuotePool(){ return remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES; }
 async function loadQuotesFile(){
   try{
     const res = await fetch('./quotes.json', { cache:'no-store' });
     if(!res.ok) throw new Error('quotes.json not found');
     const data = await res.json();
-    if(Array.isArray(data) && data.length>0) remoteQuotes = data.filter(s=>typeof s==='string' && s.trim());
+    if(Array.isArray(data) && data.length>0){
+      remoteQuotes = data.map((item,i)=>{
+        if(typeof item==='string' && item.trim()) return { id:'pos-'+i, text:item };
+        if(item && typeof item.text==='string' && item.text.trim()) return { id: item.id!=null ? String(item.id) : 'pos-'+i, text:item.text };
+        return null;
+      }).filter(Boolean);
+    }
   }catch(err){
     console.warn('[quotes.json] 讀取失敗，改用保底句子。常見原因：用 file:// 本機檔案開啟（瀏覽器會擋）、quotes.json 沒上傳、或路徑/檔名打錯。實際錯誤：', err);
   }
 }
-// 今天抽到第幾句，存進獨立的 IndexedDB 格子裡（跟 entries/config 分開）。
+// 今天抽到哪一句（存 id），存進獨立的 IndexedDB 格子裡（跟 entries/config 分開）。
 // 換日才重新抽一次；同一天不管開幾次網頁，都是同一句。
-let dailyQuoteIndex = null;
+let dailyQuoteId = null;
 let startDateEditMode = false; // 記帳起始日預設鎖定顯示，要點「修改」才會打開輸入框，避免手滑誤觸
 let dailyQuoteRevealed = false;
 async function ensureDailyQuote(){
   const today = todayLocal();
-  const pool = remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES;
+  const pool = getQuotePool();
   let state = null;
   try{ const v = await idbGet('ledger-quote-state'); state = v ? JSON.parse(v) : null; }catch(err){}
-  const needNewRoll = !state || state.date !== today || typeof state.index !== 'number' || state.index >= pool.length;
+  const needNewRoll = !state || state.date !== today || !pool.some(q=>q.id===state.id);
   if(needNewRoll){
-    state = { date: today, index: Math.floor(Math.random()*pool.length), revealed:false };
+    // 讀取「已經抽過」的語錄 id 清單。
+    let shown = [];
+    try{ const v = await idbGet('ledger-quote-shown'); shown = v ? JSON.parse(v) : []; }catch(err){}
+    let candidates = pool.filter(q => !shown.includes(q.id));
+    if(candidates.length===0){ shown = []; candidates = pool; } // 整輪抽完了，重新開始一輪
+    const chosen = candidates[Math.floor(Math.random()*candidates.length)];
+    shown.push(chosen.id);
+    try{ await idbSet('ledger-quote-shown', JSON.stringify(shown)); }catch(err){}
+    state = { date: today, id: chosen.id, revealed:false };
     try{ await idbSet('ledger-quote-state', JSON.stringify(state)); }catch(err){}
   }
-  dailyQuoteIndex = state.index;
+  dailyQuoteId = state.id;
   dailyQuoteRevealed = !!state.revealed;
 }
 async function revealDailyQuote(){
   dailyQuoteRevealed = true;
   try{
     const v = await idbGet('ledger-quote-state');
-    const state = v ? JSON.parse(v) : { date: todayLocal(), index: dailyQuoteIndex };
+    const state = v ? JSON.parse(v) : { date: todayLocal(), id: dailyQuoteId };
     state.revealed = true;
     await idbSet('ledger-quote-state', JSON.stringify(state));
   }catch(err){}
@@ -682,16 +703,20 @@ async function revealDailyQuote(){
 }
 document.getElementById('drawQuoteBtn').onclick = revealDailyQuote;
 async function forceNewQuoteDraw(){
-  const pool = remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES;
-  const state = { date: todayLocal(), index: Math.floor(Math.random()*pool.length), revealed:false };
+  const pool = getQuotePool();
+  // 重置起始日＝重新開始一輪，不受「不重複」限制，已抽過的歷史直接清空重算。
+  const chosen = pool[Math.floor(Math.random()*pool.length)];
+  try{ await idbSet('ledger-quote-shown', JSON.stringify([chosen.id])); }catch(err){}
+  const state = { date: todayLocal(), id: chosen.id, revealed:false };
   try{ await idbSet('ledger-quote-state', JSON.stringify(state)); }catch(err){}
-  dailyQuoteIndex = state.index;
+  dailyQuoteId = chosen.id;
   dailyQuoteRevealed = false;
 }
 function pickSessionQuote(){
-  const pool = remoteQuotes.length>0 ? remoteQuotes : FALLBACK_QUOTES;
-  if(dailyQuoteIndex===null) return pool[0]; // ensureDailyQuote 還沒跑完前的暫時顯示，跑完會自動補上正確的
-  return pool[dailyQuoteIndex % pool.length];
+  const pool = getQuotePool();
+  const found = pool.find(q=>q.id===dailyQuoteId);
+  if(found) return found.text;
+  return pool[0] ? pool[0].text : ''; // ensureDailyQuote 還沒跑完前的暫時顯示，跑完會自動補上正確的
 }
 
 const CURRENCY_NAME_TO_CODE = {
@@ -2177,8 +2202,6 @@ function renderReport(){
   if(currSelArea){
     if(reportMode==='savingsrate'){
       currSelArea.innerHTML = '<span class="hint">（儲蓄率是百分比，不受幣值影響）</span>';
-    } else if(reportMode==='correctioncount'){
-      currSelArea.innerHTML = '<span class="hint">（次數統計，不受幣值影響）</span>';
     } else {
       currSelArea.innerHTML = buildCurrencySelectHtml('reportCurrencySelect', reportCurrency);
       document.getElementById('reportCurrencySelect').onchange = (ev)=>{ reportCurrency = ev.target.value; renderReport(); };
@@ -2196,7 +2219,6 @@ function renderReport(){
   else if(reportMode==='compare') renderCompareTable();
   else if(reportMode==='topexpense') renderTopExpenseList();
   else if(reportMode==='weekday') renderWeekdayBars();
-  else if(reportMode==='correctioncount') renderCorrectionCountBars();
 }
 document.querySelectorAll('#reportModeToggle button').forEach(btn=>{
   btn.onclick = ()=>{
@@ -2425,24 +2447,6 @@ function renderWeekdayBars(){
   barsEl.innerHTML = items.map(it=>`
     <div class="bd-row">
       <div class="bd-top"><span class="bd-label">${it.label}</span><span class="bd-amt mono">${it.value.toFixed(0)}</span></div>
-      <div class="bd-track"><div class="bd-fill expense" style="width:${(it.value/max*100)}%"></div></div>
-    </div>`).join('');
-}
-function renderCorrectionCountBars(){
-  document.getElementById('reportModeHint').textContent = '過去 12 個月，每月「補正」次數（不含最初設定家底那種校正）。次數越少，代表當下記帳越準確、越少要事後補救。';
-  const months = getMonthEndDates(12);
-  const counts = months.map(m=> entries.filter(e=>e.type==='calibration' && e.calibrationKind==='correction' && e.date.startsWith(m.label)).length);
-  const items = months.map((m,i)=>({ label:m.label, value:counts[i] }));
-  const barsEl = document.getElementById('reportBarsArea');
-  const max = Math.max(...items.map(i=>i.value), 1);
-  const totalCorrections = counts.reduce((a,b)=>a+b,0);
-  const totalNormalEntries = entries.filter(e=>e.type==='expense'||e.type==='income').length;
-  const ratioText = totalNormalEntries>0
-    ? `過去 12 個月共補正 ${totalCorrections} 次，平均每 ${(totalNormalEntries/Math.max(totalCorrections,1)).toFixed(0)} 筆一般紀錄才需要補正一次。`
-    : `過去 12 個月共補正 ${totalCorrections} 次。`;
-  barsEl.innerHTML = `<p class="hint" style="margin-top:0;">${ratioText}</p>` + items.map(it=>`
-    <div class="bd-row">
-      <div class="bd-top"><span class="bd-label">${it.label}</span><span class="bd-amt mono">${it.value} 次</span></div>
       <div class="bd-track"><div class="bd-fill expense" style="width:${(it.value/max*100)}%"></div></div>
     </div>`).join('');
 }
