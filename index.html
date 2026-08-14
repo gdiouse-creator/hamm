@@ -354,6 +354,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
           </div>
           <span id="breakdownCurrencySelectArea"></span>
         </div>
+        <div id="breakdownControlsArea" style="margin-top:8px;"></div>
       </div>
       <div id="breakdownView"></div>
     </div>
@@ -1981,12 +1982,6 @@ function computeCategoryAggForRange(mode, startDate, endDate){
   });
   return agg;
 }
-function computeMonthCategoryAgg(mode){
-  const ym = getStatsMonth();
-  const [y,m] = ym.split('-').map(Number);
-  const endD = new Date(y, m, 0);
-  return computeCategoryAggForRange(mode, ym+'-01', dateToLocalYMD(endD));
-}
 
 function switchTab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
@@ -2038,31 +2033,30 @@ function renderCategoryAccordion(agg, mode, displayCurrency){
 let breakdownMode = 'expense';
 let breakdownLevel = 'type';
 
-function computeCategorySubItems(mode){
-  const ym = getStatsMonth();
+function computeCategorySubItems(mode, startDate, endDate){
   const agg = {};
-  entries.filter(e=>e.type===mode && e.date.startsWith(ym) && e.categorySub).forEach(e=>{
+  entries.filter(e=>e.type===mode && e.date>=startDate && e.date<=endDate && e.categorySub).forEach(e=>{
     const label = categoryLabelWithIcon(e.categoryType, e.categorySub);
     const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
     agg[label] = (agg[label]||0) + amt;
   });
   return Object.entries(agg).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).map(([label,value])=>({label,value}));
 }
-function computeBreakdownData(mode, level){
+function computeBreakdownData(mode, level, startDate, endDate){
   if(mode==='both'){
     if(level==='sub'){
-      return { kind:'both', income: computeCategorySubItems('income'), expense: computeCategorySubItems('expense') };
+      return { kind:'both', income: computeCategorySubItems('income',startDate,endDate), expense: computeCategorySubItems('expense',startDate,endDate) };
     }
-    const expAgg = computeMonthCategoryAgg('expense');
-    const incAgg = computeMonthCategoryAgg('income');
+    const expAgg = computeCategoryAggForRange('expense', startDate, endDate);
+    const incAgg = computeCategoryAggForRange('income', startDate, endDate);
     const expItems = Object.entries(expAgg).filter(([,v])=>v.total>0).sort((a,b)=>b[1].total-a[1].total).map(([label,v])=>({label:categoryLabelWithIcon(label), value:v.total}));
     const incItems = Object.entries(incAgg).filter(([,v])=>v.total>0).sort((a,b)=>b[1].total-a[1].total).map(([label,v])=>({label:categoryLabelWithIcon(label), value:v.total}));
     return { kind:'both', income:incItems, expense:expItems };
   }
   if(level==='sub'){
-    return { kind:'single', items: computeCategorySubItems(mode), styleClass: mode };
+    return { kind:'single', items: computeCategorySubItems(mode,startDate,endDate), styleClass: mode };
   }
-  const agg = computeMonthCategoryAgg(mode);
+  const agg = computeCategoryAggForRange(mode, startDate, endDate);
   const items = Object.entries(agg).filter(([,v])=>v.total>0).sort((a,b)=>b[1].total-a[1].total).map(([label,v])=>({label:categoryLabelWithIcon(label), value:v.total}));
   return { kind:'single', items, styleClass: mode };
 }
@@ -2076,9 +2070,75 @@ function renderBreakdownRows(items, styleClass, maxOverride, suffix){
       <div class="bd-track"><div class="bd-fill ${styleClass}" style="width:${max>0?(it.value/max*100):0}%"></div></div>
     </div>`).join('');
 }
+let breakdownGranularity = 'month'; // 'day'|'week'|'month'|'年'；month 跟隨頁面上方共用的月份選擇器
+let breakdownDay = null;
+let breakdownWeekAnchor = null;
+let breakdownYear = null;
+function getBreakdownRange(){
+  if(breakdownGranularity==='day'){
+    if(!breakdownDay) breakdownDay = todayLocal();
+    return { start: breakdownDay, end: breakdownDay, label: breakdownDay };
+  }
+  if(breakdownGranularity==='week'){
+    if(!breakdownWeekAnchor) breakdownWeekAnchor = todayLocal();
+    const d = new Date(breakdownWeekAnchor+'T00:00:00');
+    const day = d.getDay();
+    const diff = (day===0 ? -6 : 1-day);
+    const monday = new Date(d); monday.setDate(d.getDate()+diff);
+    const sunday = new Date(monday); sunday.setDate(monday.getDate()+6);
+    const startStr = dateToLocalYMD(monday), endStr = dateToLocalYMD(sunday);
+    return { start: startStr, end: endStr, label: `${startStr} ～ ${endStr}` };
+  }
+  if(breakdownGranularity==='year'){
+    if(!breakdownYear) breakdownYear = String(new Date(todayLocal()+'T00:00:00').getFullYear());
+    return { start: breakdownYear+'-01-01', end: breakdownYear+'-12-31', label: breakdownYear+'年' };
+  }
+  const ym = getStatsMonth();
+  const [y,m] = ym.split('-').map(Number);
+  const endD = new Date(y, m, 0);
+  return { start: ym+'-01', end: dateToLocalYMD(endD), label: monthLabel(ym) };
+}
+function renderBreakdownControls(){
+  const ctrlEl = document.getElementById('breakdownControlsArea');
+  if(!ctrlEl) return;
+  let extraHtml = '';
+  if(breakdownGranularity==='day'){
+    extraHtml = `<input type="date" id="breakdownDayInput" value="${breakdownDay||todayLocal()}" style="max-width:150px;margin-left:8px;">`;
+  } else if(breakdownGranularity==='week'){
+    extraHtml = `<input type="date" id="breakdownWeekInput" value="${breakdownWeekAnchor||todayLocal()}" style="max-width:150px;margin-left:8px;">`;
+  } else if(breakdownGranularity==='year'){
+    extraHtml = `<input type="number" id="breakdownYearInput" value="${breakdownYear||new Date(todayLocal()+'T00:00:00').getFullYear()}" style="max-width:90px;margin-left:8px;" min="2000" max="2100">`;
+  }
+  ctrlEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:0;">
+      <div class="chip-group" id="breakdownGranToggle">
+        <button data-gran="day" class="${breakdownGranularity==='day'?'on':''}">日</button>
+        <button data-gran="week" class="${breakdownGranularity==='week'?'on':''}">週</button>
+        <button data-gran="month" class="${breakdownGranularity==='month'?'on':''}">月</button>
+        <button data-gran="year" class="${breakdownGranularity==='year'?'on':''}">年</button>
+      </div>
+      ${extraHtml}
+    </div>`;
+  document.querySelectorAll('#breakdownGranToggle button').forEach(btn=>{
+    btn.onclick = ()=>{ breakdownGranularity = btn.dataset.gran; renderBreakdown(); };
+  });
+  const dayInp = document.getElementById('breakdownDayInput');
+  if(dayInp) dayInp.onchange = (ev)=>{ if(ev.target.value){ breakdownDay = ev.target.value; renderBreakdown(); } };
+  const weekInp = document.getElementById('breakdownWeekInput');
+  if(weekInp) weekInp.onchange = (ev)=>{ if(ev.target.value){ breakdownWeekAnchor = ev.target.value; renderBreakdown(); } };
+  const yearInp = document.getElementById('breakdownYearInput');
+  if(yearInp) yearInp.onchange = (ev)=>{
+    const v = parseInt(ev.target.value,10);
+    breakdownYear = String(Math.max(2000, Math.min(2100, isNaN(v)?new Date().getFullYear():v)));
+    renderBreakdown();
+  };
+}
 function renderBreakdown(){
   const wrap = document.getElementById('breakdownView');
   if(!wrap) return;
+  renderBreakdownControls();
+  const range = getBreakdownRange();
+  document.getElementById('breakdownTitle').textContent = `分類細分（${range.label}）`;
   const selArea = document.getElementById('breakdownCurrencySelectArea');
   if(selArea){
     selArea.innerHTML = buildCurrencySelectHtml('breakdownCurrencySelect', breakdownCurrency);
@@ -2086,14 +2146,14 @@ function renderBreakdown(){
   }
   const suffix = currencyShortSuffix(breakdownCurrency);
   const convItems = (arr)=> arr.map(it=>({ ...it, value: fromTWD(it.value, breakdownCurrency) }));
-  const data = computeBreakdownData(breakdownMode, breakdownLevel);
+  const data = computeBreakdownData(breakdownMode, breakdownLevel, range.start, range.end);
   if(data.kind==='both'){
     const income = convItems(data.income), expense = convItems(data.expense);
     const maxAll = Math.max(1, ...income.map(i=>i.value), ...expense.map(i=>i.value));
     let html = '<div class="breakdown-group-title">收入</div>';
-    html += income.length ? renderBreakdownRows(income,'income',maxAll,suffix) : '<div class="empty">本月尚無收入</div>';
+    html += income.length ? renderBreakdownRows(income,'income',maxAll,suffix) : '<div class="empty">這段期間尚無收入</div>';
     html += '<div class="breakdown-group-title">支出</div>';
-    html += expense.length ? renderBreakdownRows(expense,'expense',maxAll,suffix) : '<div class="empty">本月尚無支出</div>';
+    html += expense.length ? renderBreakdownRows(expense,'expense',maxAll,suffix) : '<div class="empty">這段期間尚無支出</div>';
     wrap.innerHTML = html;
   }else{
     wrap.innerHTML = renderBreakdownRows(convItems(data.items), data.styleClass, null, suffix);
@@ -2686,7 +2746,6 @@ function renderMonthSelector(){
   const isCurrent = !selectedStatsMonth;
   document.getElementById('monthResetHint').style.display = isCurrent ? 'none' : 'block';
   document.getElementById('statIncomeExpenseTitle').textContent = `${monthLabel(ym)} 收支`;
-  document.getElementById('breakdownTitle').textContent = `分類細分（${monthLabel(ym)}）`;
 }
 function shiftStatsMonth(delta){
   const [y,m] = getStatsMonth().split('-').map(Number);
@@ -2911,6 +2970,9 @@ document.getElementById('saveBtn').onclick = ()=>{
   refreshNow();
   updateCurrencyNote();
   refreshWalletBalanceNotes();
+  // 存完不要跳回整頁最頂端（那樣連 header/提醒列都會看到），只要讓記帳表單的上緣回到視窗頂部，方便連續記帳
+  const entrySection = document.getElementById('tab-entry');
+  if(entrySection) entrySection.scrollIntoView({ behavior:'smooth', block:'start' });
 };
 
 document.getElementById('addCurr').onclick = ()=>{
