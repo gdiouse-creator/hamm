@@ -372,6 +372,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
             <button data-report="compare">月對月比較</button>
             <button data-report="topexpense">支出排行</button>
             <button data-report="weekday">星期消費</button>
+            <button data-report="detailtable">類別明細表</button>
           </div>
           <div style="text-align:center;margin-top:6px;" id="reportCurrencySelectArea"></div>
           <p class="hint" id="reportModeHint" style="margin:10px 0 0;"></p>
@@ -2279,6 +2280,7 @@ function renderReport(){
   else if(reportMode==='compare') renderCompareTable();
   else if(reportMode==='topexpense') renderTopExpenseList();
   else if(reportMode==='weekday') renderWeekdayBars();
+  else if(reportMode==='detailtable') renderDetailTable();
 }
 document.querySelectorAll('#reportModeToggle button').forEach(btn=>{
   btn.onclick = ()=>{
@@ -2509,6 +2511,112 @@ function renderWeekdayBars(){
       <div class="bd-top"><span class="bd-label">${it.label}</span><span class="bd-amt mono">${it.value.toFixed(0)}</span></div>
       <div class="bd-track"><div class="bd-fill expense" style="width:${(it.value/max*100)}%"></div></div>
     </div>`).join('');
+}
+
+let detailTableGranularity = 'day'; // 'day'=本月每天, 'week'=本月每週, 'month'=今年每月
+let detailTableLevel = 'type'; // 'type'=第一層, 'sub'=第二層
+let detailTableMode = 'expense'; // 'expense'|'income'
+function getDetailTableBuckets(){
+  const today = new Date(todayLocal()+'T00:00:00');
+  if(detailTableGranularity==='month'){
+    // 今年每月
+    const y = today.getFullYear();
+    return Array.from({length:12}, (_,i)=>{
+      const start = `${y}-${String(i+1).padStart(2,'0')}-01`;
+      const endD = new Date(y, i+1, 0);
+      return { label:`${i+1}月`, start, end: dateToLocalYMD(endD) };
+    });
+  }
+  if(detailTableGranularity==='week'){
+    // 本月每週（跨到上下月的部分仍算進「涵蓋當月最多天」的那一週，用起始日所在月份判斷要不要列出）
+    const y = today.getFullYear(), m = today.getMonth();
+    const firstOfMonth = new Date(y, m, 1);
+    const lastOfMonth = new Date(y, m+1, 0);
+    const buckets = [];
+    let cursor = new Date(firstOfMonth);
+    const day0 = cursor.getDay();
+    cursor.setDate(cursor.getDate() - (day0===0?6:day0-1)); // 回推到那週的週一
+    let weekNo = 1;
+    while(cursor <= lastOfMonth){
+      const monday = new Date(cursor);
+      const sunday = new Date(cursor); sunday.setDate(sunday.getDate()+6);
+      buckets.push({ label:`第${weekNo}週`, start: dateToLocalYMD(monday), end: dateToLocalYMD(sunday) });
+      cursor.setDate(cursor.getDate()+7);
+      weekNo++;
+    }
+    return buckets;
+  }
+  // 本月每天
+  const y = today.getFullYear(), m = today.getMonth();
+  const lastDay = new Date(y, m+1, 0).getDate();
+  return Array.from({length:lastDay}, (_,i)=>{
+    const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;
+    return { label:String(i+1), start:ds, end:ds };
+  });
+}
+function renderDetailTable(){
+  const ctrlEl = document.getElementById('reportControlsArea');
+  ctrlEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;">
+      <div class="chip-group" id="detailTableGranToggle">
+        <button data-gran="day" class="${detailTableGranularity==='day'?'on':''}">本月每天</button>
+        <button data-gran="week" class="${detailTableGranularity==='week'?'on':''}">本月每週</button>
+        <button data-gran="month" class="${detailTableGranularity==='month'?'on':''}">今年每月</button>
+      </div>
+      <div class="chip-group" id="detailTableModeToggle">
+        <button data-mode="expense" class="${detailTableMode==='expense'?'on':''}">支出</button>
+        <button data-mode="income" class="${detailTableMode==='income'?'on':''}">收入</button>
+      </div>
+      <div class="chip-group" id="detailTableLevelToggle">
+        <button data-level="type" class="${detailTableLevel==='type'?'on':''}">第一層</button>
+        <button data-level="sub" class="${detailTableLevel==='sub'?'on':''}">第二層</button>
+      </div>
+    </div>`;
+  document.querySelectorAll('#detailTableGranToggle button').forEach(btn=>{ btn.onclick = ()=>{ detailTableGranularity = btn.dataset.gran; renderDetailTable(); }; });
+  document.querySelectorAll('#detailTableModeToggle button').forEach(btn=>{ btn.onclick = ()=>{ detailTableMode = btn.dataset.mode; renderDetailTable(); }; });
+  document.querySelectorAll('#detailTableLevelToggle button').forEach(btn=>{ btn.onclick = ()=>{ detailTableLevel = btn.dataset.level; renderDetailTable(); }; });
+
+  const granLabel = {day:'本月每天',week:'本月每週',month:'今年每月'}[detailTableGranularity];
+  const modeLabel = detailTableMode==='expense' ? '支出' : '收入';
+  const levelLabel = detailTableLevel==='type' ? '第一層類別' : '第二層子類別';
+  document.getElementById('reportModeHint').textContent = `${granLabel}的${modeLabel}，依${levelLabel}全覽（可左右滑動查看）${currencyShortSuffix(reportCurrency)}。`;
+
+  const buckets = getDetailTableBuckets();
+  // 找出這個範圍內實際出現過的所有欄位（類別或子類別），依總額排序
+  const colTotals = {};
+  const cellData = buckets.map(b=>{
+    const rangeEntries = entries.filter(e=>e.type===detailTableMode && e.date>=b.start && e.date<=b.end);
+    const row = {};
+    rangeEntries.forEach(e=>{
+      const col = detailTableLevel==='type' ? (e.categoryType||'未分類') : categoryLabelWithIcon(e.categoryType, e.categorySub);
+      const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
+      row[col] = (row[col]||0) + amt;
+      colTotals[col] = (colTotals[col]||0) + amt;
+    });
+    return row;
+  });
+  const cols = Object.keys(colTotals).sort((a,b)=>colTotals[b]-colTotals[a]);
+  const tableEl = document.getElementById('reportTableArea');
+  if(cols.length===0){ tableEl.innerHTML = '<div class="empty">這個範圍尚無資料</div>'; return; }
+  const colLabel = (c)=> detailTableLevel==='type' ? `${categoryTypeIcon(c)}${c}` : c;
+  const suffix = currencyShortSuffix(reportCurrency);
+  let html = '<div style="overflow-x:auto;"><table class="line-table" style="white-space:nowrap;"><thead><tr><th>期間</th>';
+  cols.forEach(c=>{ html += `<th>${colLabel(c)}</th>`; });
+  html += '<th>小計</th></tr></thead><tbody>';
+  buckets.forEach((b,i)=>{
+    const row = cellData[i];
+    const rowTotal = Object.values(row).reduce((s,v)=>s+v,0);
+    if(rowTotal===0) return; // 這個期間完全沒資料就不列出，避免表格過長
+    html += `<tr><td>${b.label}</td>`;
+    cols.forEach(c=>{ const v = row[c]||0; html += `<td class="mono">${v>0?fromTWD(v,reportCurrency).toFixed(0):'—'}</td>`; });
+    html += `<td class="mono" style="font-weight:700;">${fromTWD(rowTotal,reportCurrency).toFixed(0)}</td></tr>`;
+  });
+  html += `<tr style="border-top:2px solid var(--ink);"><td style="font-weight:700;">總計</td>`;
+  cols.forEach(c=>{ html += `<td class="mono" style="font-weight:700;">${fromTWD(colTotals[c],reportCurrency).toFixed(0)}</td>`; });
+  const grandTotal = Object.values(colTotals).reduce((s,v)=>s+v,0);
+  html += `<td class="mono" style="font-weight:700;">${fromTWD(grandTotal,reportCurrency).toFixed(0)}</td></tr>`;
+  html += '</tbody></table></div>';
+  tableEl.innerHTML = html;
 }
 
 let catStatsGranularity = 'month'; // 'month' 跟隨頁面上方共用的月份選擇器；'year'/'range' 各自獨立
