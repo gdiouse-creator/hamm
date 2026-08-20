@@ -373,6 +373,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
             <button data-report="topexpense">支出排行</button>
             <button data-report="weekday">星期消費</button>
             <button data-report="detailtable">類別明細表</button>
+            <button data-report="categoryavg">分類平均</button>
           </div>
           <div style="text-align:center;margin-top:6px;" id="reportCurrencySelectArea"></div>
           <p class="hint" id="reportModeHint" style="margin:10px 0 0;"></p>
@@ -2281,6 +2282,7 @@ function renderReport(){
   else if(reportMode==='topexpense') renderTopExpenseList();
   else if(reportMode==='weekday') renderWeekdayBars();
   else if(reportMode==='detailtable') renderDetailTable();
+  else if(reportMode==='categoryavg') renderCategoryAverage();
 }
 document.querySelectorAll('#reportModeToggle button').forEach(btn=>{
   btn.onclick = ()=>{
@@ -2617,6 +2619,96 @@ function renderDetailTable(){
   html += `<td class="mono" style="font-weight:700;">${fromTWD(grandTotal,reportCurrency).toFixed(0)}</td></tr>`;
   html += '</tbody></table></div>';
   tableEl.innerHTML = html;
+}
+
+let catAvgMode = 'expense';
+let catAvgType = null;
+let catAvgSub = ''; // '' = 不分子類別，看整個第一層
+let catAvgStart = '';
+let catAvgEnd = '';
+let catAvgBasis = 'amortized'; // 'amortized'=攤銷平均(除以區間總天數) | 'occurrence'=實際發生平均(除以實際有紀錄的天數)
+function renderCategoryAverage(){
+  const ctrlEl = document.getElementById('reportControlsArea');
+  const types = categoryTypesForKind(catAvgMode);
+  if(!catAvgType || !types.includes(catAvgType)) catAvgType = types[0] || '';
+  const subs = catAvgType ? (config.categorySubs[catAvgType]||[]) : [];
+  if(!subs.includes(catAvgSub)) catAvgSub = '';
+  if(!catAvgStart || !catAvgEnd){
+    // 預設抓「最早一筆到今天」，讓使用者第一次打開就有東西看
+    const earliest = getEarliestEntryDate();
+    catAvgStart = earliest || todayLocal();
+    catAvgEnd = todayLocal();
+  }
+  ctrlEl.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+      <div class="chip-group" id="catAvgModeToggle">
+        <button data-mode="expense" class="${catAvgMode==='expense'?'on':''}">支出</button>
+        <button data-mode="income" class="${catAvgMode==='income'?'on':''}">收入</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;">
+        <select id="catAvgTypeSelect">${types.map(t=>`<option value="${t}" ${t===catAvgType?'selected':''}>${categoryTypeIcon(t)}${t}</option>`).join('')}</select>
+        <select id="catAvgSubSelect">
+          <option value="" ${catAvgSub===''?'selected':''}>（不分子類別，看整個「${catAvgType}」）</option>
+          ${subs.map(s=>`<option value="${s}" ${s===catAvgSub?'selected':''}>${categorySubIcon(catAvgType,s)}${s}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;">
+        <input type="date" id="catAvgStartInput" value="${catAvgStart}" style="max-width:140px;">
+        <span class="hint" style="margin:0;">～</span>
+        <input type="date" id="catAvgEndInput" value="${catAvgEnd}" style="max-width:140px;">
+      </div>
+      <div class="chip-group" id="catAvgBasisToggle" title="選擇平均值的計算基準">
+        <button data-basis="amortized" class="${catAvgBasis==='amortized'?'on':''}">攤銷平均</button>
+        <button data-basis="occurrence" class="${catAvgBasis==='occurrence'?'on':''}">實際發生平均</button>
+      </div>
+      <p class="hint" style="margin:2px 0 0;font-size:11px;">
+        ${catAvgBasis==='amortized' ? '攤銷平均：總金額平均分攤到區間內每一天，反映消費節奏，適合抓預算。' : '實際發生平均：只計算真正有紀錄的天數，反映單次平均金額，不受空窗期稀釋。'}
+      </p>
+    </div>`;
+  document.querySelectorAll('#catAvgModeToggle button').forEach(btn=>{
+    btn.onclick = ()=>{ catAvgMode = btn.dataset.mode; catAvgType = null; catAvgSub=''; renderCategoryAverage(); };
+  });
+  document.getElementById('catAvgTypeSelect').onchange = (ev)=>{ catAvgType = ev.target.value; catAvgSub=''; renderCategoryAverage(); };
+  document.getElementById('catAvgSubSelect').onchange = (ev)=>{ catAvgSub = ev.target.value; renderCategoryAverage(); };
+  document.getElementById('catAvgStartInput').onchange = (ev)=>{ if(ev.target.value){ catAvgStart = ev.target.value; renderCategoryAverage(); } };
+  document.getElementById('catAvgEndInput').onchange = (ev)=>{ if(ev.target.value){ catAvgEnd = ev.target.value; renderCategoryAverage(); } };
+  document.querySelectorAll('#catAvgBasisToggle button').forEach(btn=>{
+    btn.onclick = ()=>{ catAvgBasis = btn.dataset.basis; renderCategoryAverage(); };
+  });
+
+  const catLabel = catAvgSub ? categoryLabelWithIcon(catAvgType, catAvgSub) : categoryTypeIcon(catAvgType)+catAvgType;
+  const barsEl = document.getElementById('reportBarsArea');
+  if(!catAvgType || catAvgStart > catAvgEnd){
+    document.getElementById('reportModeHint').textContent = '請選擇正確的區間（起始日不能晚於結束日）。';
+    barsEl.innerHTML = '';
+    return;
+  }
+  const basisLabel = catAvgBasis==='amortized' ? '攤銷平均' : '實際發生平均';
+  document.getElementById('reportModeHint').textContent = `${catAvgStart} ～ ${catAvgEnd}，「${catLabel}」的${basisLabel}${currencyShortSuffix(reportCurrency)}。`;
+
+  const matched = entries.filter(e=> e.type===catAvgMode && e.date>=catAvgStart && e.date<=catAvgEnd
+      && e.categoryType===catAvgType && (catAvgSub ? e.categorySub===catAvgSub : true));
+  const totalTWD = matched.reduce((s,e)=> s + ((typeof e.twdAmount==='number')?e.twdAmount:toTWD(e.amount,e.currency)), 0);
+
+  const rangeDays = Math.round((new Date(catAvgEnd+'T00:00:00') - new Date(catAvgStart+'T00:00:00'))/86400000) + 1;
+  const occurrenceDays = new Set(matched.map(e=>e.date)).size;
+  const days = catAvgBasis==='amortized' ? rangeDays : occurrenceDays;
+  const dailyAvg = days>0 ? totalTWD / days : 0;
+  const stats = [
+    { label:'日平均', value: dailyAvg },
+    { label:'週平均', value: dailyAvg * 7 },
+    { label:'月平均', value: dailyAvg * 30.44 },
+    { label:'年平均', value: dailyAvg * 365.25 }
+  ];
+  const suffix = currencyShortSuffix(reportCurrency);
+  const basisNote = catAvgBasis==='amortized'
+    ? `區間共 ${rangeDays} 天（含未發生紀錄的日子）`
+    : `實際有紀錄的天數為 ${occurrenceDays} 天（區間共 ${rangeDays} 天）`;
+  barsEl.innerHTML = `<p class="hint" style="margin-top:0;">區間內總計 ${fromTWD(totalTWD,reportCurrency).toFixed(0)}${suffix}，${basisNote}。</p>` +
+    (days===0 ? '<div class="empty">這段期間沒有任何紀錄，無法計算平均值</div>' : stats.map(s=>`
+    <div class="bd-row">
+      <div class="bd-top"><span class="bd-label">${s.label}</span><span class="bd-amt mono">${fromTWD(s.value,reportCurrency).toFixed(1)}${suffix}</span></div>
+    </div>`).join(''));
 }
 
 let catStatsGranularity = 'month'; // 'month' 跟隨頁面上方共用的月份選擇器；'year'/'range' 各自獨立
