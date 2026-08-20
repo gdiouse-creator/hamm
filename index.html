@@ -2627,7 +2627,26 @@ let catAvgSub = ''; // '' = 不分子類別，看整個第一層
 let catAvgStart = '';
 let catAvgEnd = '';
 let catAvgBasis = 'amortized'; // 'amortized'=攤銷平均(除以區間總天數) | 'occurrence'=實際發生平均(除以實際有紀錄的天數)
+function getAverageMonthDaysInRange(startDate, endDate){
+  const start = new Date(startDate+'T00:00:00');
+  const end = new Date(endDate+'T00:00:00');
+  const monthKeys = new Set();
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  while(cursor <= end){
+    monthKeys.add(`${cursor.getFullYear()}-${cursor.getMonth()}`);
+    cursor.setMonth(cursor.getMonth()+1);
+  }
+  const dayCounts = [...monthKeys].map(key=>{
+    const [y,m] = key.split('-').map(Number);
+    return new Date(y, m+1, 0).getDate(); // m 是0起算的月份，取該月最後一天的日期數字＝該月實際天數
+  });
+  return dayCounts.reduce((a,b)=>a+b,0) / dayCounts.length;
+}
 function renderCategoryAverage(){
+  // 防禦性修正：這個模式底下切換日期/類別/基準時，是直接呼叫這個函式、不會經過外層 renderReport() 的畫布收合邏輯，
+  // 保險起見這裡自己也強制把圖表畫布收乾淨，避免中間留一大塊空白。
+  const canvasEl = document.getElementById('reportChart');
+  if(canvasEl){ canvasEl.style.display='none'; canvasEl.style.height='0px'; canvasEl.style.width='0px'; canvasEl.removeAttribute('height'); }
   const ctrlEl = document.getElementById('reportControlsArea');
   const types = categoryTypesForKind(catAvgMode);
   if(!catAvgType || !types.includes(catAvgType)) catAvgType = types[0] || '';
@@ -2694,17 +2713,18 @@ function renderCategoryAverage(){
   const occurrenceDays = new Set(matched.map(e=>e.date)).size;
   const days = catAvgBasis==='amortized' ? rangeDays : occurrenceDays;
   const dailyAvg = days>0 ? totalTWD / days : 0;
+  const avgMonthDays = getAverageMonthDaysInRange(catAvgStart, catAvgEnd);
   const stats = [
     { label:'日平均', value: dailyAvg },
     { label:'週平均', value: dailyAvg * 7 },
-    { label:'月平均', value: dailyAvg * 30.44 },
+    { label:'月平均', value: dailyAvg * avgMonthDays },
     { label:'年平均', value: dailyAvg * 365.25 }
   ];
   const suffix = currencyShortSuffix(reportCurrency);
   const basisNote = catAvgBasis==='amortized'
     ? `區間共 ${rangeDays} 天（含未發生紀錄的日子）`
     : `實際有紀錄的天數為 ${occurrenceDays} 天（區間共 ${rangeDays} 天）`;
-  barsEl.innerHTML = `<p class="hint" style="margin-top:0;">區間內總計 ${fromTWD(totalTWD,reportCurrency).toFixed(0)}${suffix}，${basisNote}。</p>` +
+  barsEl.innerHTML = `<p class="hint" style="margin-top:0;">區間內總計 ${fromTWD(totalTWD,reportCurrency).toFixed(0)}${suffix}，${basisNote}。月平均採用區間涵蓋月份的實際天數平均（${avgMonthDays.toFixed(1)} 天／月），年平均採用 365.25 天／年。</p>` +
     (days===0 ? '<div class="empty">這段期間沒有任何紀錄，無法計算平均值</div>' : stats.map(s=>`
     <div class="bd-row">
       <div class="bd-top"><span class="bd-label">${s.label}</span><span class="bd-amt mono">${fromTWD(s.value,reportCurrency).toFixed(1)}${suffix}</span></div>
