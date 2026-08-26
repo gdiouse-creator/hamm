@@ -139,6 +139,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 .acc-head::-webkit-details-marker{display:none;}
 .acc-title{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;}
 .acc-amt{font-size:13px;font-weight:700;}
+.acc-extra{font-size:11px;font-weight:400;color:var(--ink-soft);white-space:nowrap;}
 .acc-arrow{display:inline-block;transition:transform .15s;color:var(--ink-soft);font-size:10px;}
 .acc-block[open] .acc-arrow{transform:rotate(90deg);}
 .acc-body{padding:0 12px 10px;background:#fff;}
@@ -1902,6 +1903,7 @@ function buildAccordion(container, blocks){
     <details class="acc-block" data-key="${b.key}">
       <summary class="acc-head">
         <span class="acc-title"><span class="acc-arrow">▸</span>${b.title}${b.plus?`<span class="acc-plus" data-plus="${b.key}">+</span>`:''}${b.filter?`<span class="acc-filter" data-filter="${b.key}">🔍</span>`:''}</span>
+        ${b.extraText?`<span class="acc-extra mono">${b.extraText}</span>`:''}
         <span class="acc-amt mono">${b.amountText}</span>
       </summary>
       <div class="acc-body">${b.bodyHtml}</div>
@@ -1977,10 +1979,15 @@ function computeCategoryAggForRange(mode, startDate, endDate){
   const agg = {};
   rangeEntries.forEach(e=>{
     const t = e.categoryType || '未分類', s = e.categorySub || '';
-    if(!agg[t]) agg[t] = {total:0, subs:{}};
+    if(!agg[t]) agg[t] = {total:0, subs:{}, subDays:{}, days:new Set()};
     const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
     agg[t].total += amt;
-    if(s) agg[t].subs[s] = (agg[t].subs[s]||0)+amt;
+    if(s){
+      agg[t].subs[s] = (agg[t].subs[s]||0)+amt;
+      if(!agg[t].subDays[s]) agg[t].subDays[s] = new Set();
+      agg[t].subDays[s].add(e.date);
+    }
+    agg[t].days.add(e.date);
   });
   return agg;
 }
@@ -2014,15 +2021,24 @@ function entryMatchesFilter(e, filter){
   return e.categoryType===filter.categoryType && (!filter.categorySub || e.categorySub===filter.categorySub);
 }
 
-function renderCategoryAccordion(agg, mode, displayCurrency){
+function renderCategoryAccordion(agg, mode, displayCurrency, rangeDays){
   const wrap = document.getElementById('statByCategory');
   if(!wrap) return;
   const suffix = currencyShortSuffix(displayCurrency);
   const types = categoryTypesForKind(mode);
   const blocks = types.map(t=>{
-    const data = agg[t] || {total:0, subs:{}};
-    const bodyHtml = Object.keys(data.subs).length===0 ? '<div class="acc-empty">本月尚無子類別資料</div>' : Object.entries(data.subs).sort((a,b)=>b[1]-a[1]).map(([s,amt])=>`<div class="acc-sub-row clickable" data-jt="${t}" data-js="${s}"><span>${categorySubIcon(t,s)}${s}</span><span class="mono">${amt.toFixed(0)}${suffix}</span></div>`).join('');
-    return { key:t, title:categoryLabelWithIcon(t), amountText:data.total.toFixed(0)+suffix, bodyHtml, plus:true, filter:true,
+    const data = agg[t] || {total:0, subs:{}, subOccurrenceDays:{}, occurrenceDays:0};
+    const bodyHtml = Object.keys(data.subs).length===0 ? '<div class="acc-empty">本月尚無子類別資料</div>' : Object.entries(data.subs).sort((a,b)=>b[1]-a[1]).map(([s,amt])=>{
+      const subOccDays = data.subOccurrenceDays[s]||0;
+      const subAmortized = (rangeDays>0) ? amt/rangeDays : 0;
+      const subOccurrence = (subOccDays>0) ? amt/subOccDays : 0;
+      const subExtra = amt>0 ? `<span class="acc-extra mono" title="攤銷平均：分攤到區間內每一天">${subAmortized.toFixed(1)}</span> / <span class="acc-extra mono" title="實際發生平均：只算真的有紀錄的天數">${subOccurrence.toFixed(1)}</span>` : '';
+      return `<div class="acc-sub-row clickable" data-jt="${t}" data-js="${s}"><span>${categorySubIcon(t,s)}${s}</span>${subExtra}<span class="mono">${amt.toFixed(0)}${suffix}</span></div>`;
+    }).join('');
+    const amortizedAvg = (rangeDays>0) ? data.total/rangeDays : 0;
+    const occurrenceAvg = (data.occurrenceDays>0) ? data.total/data.occurrenceDays : 0;
+    const extraText = data.total>0 ? `<span title="攤銷平均：分攤到區間內每一天">${amortizedAvg.toFixed(1)}</span> / <span title="實際發生平均：只算真的有紀錄的天數">${occurrenceAvg.toFixed(1)}</span>` : '';
+    return { key:t, title:categoryLabelWithIcon(t), amountText:data.total.toFixed(0)+suffix, extraText, bodyHtml, plus:true, filter:true,
       onPlus: ()=>quickAddCategorySub(t), onFilter: ()=>applyListFilter({kind:'category', categoryType:t, categorySub:null}) };
   });
   if(blocks.length===0){ wrap.innerHTML = `<div class="empty">尚無${mode==='income'?'收入':'支出'}類別，請先到「設定」新增</div>`; return; }
@@ -2785,12 +2801,16 @@ function renderCategorySection(){
   document.getElementById('catStatsTitle').textContent = `${range.label} 分類統計`;
   renderCatStatsControls();
   const agg = computeCategoryAggForRange(categoryStatMode, range.start, range.end);
+  const rangeDays = Math.round((new Date(range.end+'T00:00:00') - new Date(range.start+'T00:00:00'))/86400000) + 1;
   const convAgg = {};
   Object.entries(agg).forEach(([t,d])=>{
-    convAgg[t] = { total: fromTWD(d.total, catStatsCurrency), subs: {} };
-    Object.entries(d.subs).forEach(([s,v])=>{ convAgg[t].subs[s] = fromTWD(v, catStatsCurrency); });
+    convAgg[t] = { total: fromTWD(d.total, catStatsCurrency), subs: {}, subOccurrenceDays: {}, occurrenceDays: d.days.size };
+    Object.entries(d.subs).forEach(([s,v])=>{
+      convAgg[t].subs[s] = fromTWD(v, catStatsCurrency);
+      convAgg[t].subOccurrenceDays[s] = (d.subDays[s] ? d.subDays[s].size : 0);
+    });
   });
-  renderCategoryAccordion(convAgg, categoryStatMode, catStatsCurrency);
+  renderCategoryAccordion(convAgg, categoryStatMode, catStatsCurrency, rangeDays);
 }
 document.querySelectorAll('#catModeToggle button').forEach(btn=>{
   btn.onclick = ()=>{
