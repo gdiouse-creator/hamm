@@ -3130,8 +3130,14 @@ document.getElementById('saveBtn').onclick = ()=>{
     const type = document.getElementById('fCalType').value, sub = document.getElementById('fCalSub').value;
     if(!type){ alert('請選擇錢包類型'); return; }
     const target = parseFloat(amount);
-    const current = walletBalanceFor(type, sub, currencyVal, editingId);
-    const delta = target - current;
+    // delta（差額）一旦算過就該固定下來，不該因為之後又補記了其他紀錄而悄悄跟著變動。
+    // 只有在「日期／金額／錢包」這些真正會影響校正意義的欄位有改變時，才重新計算差額；
+    // 純粹改備註（或其他不影響金額判斷的欄位），直接沿用原本存好的差額，不重算。
+    const original = editingId ? entries.find(x=>x.id===editingId) : null;
+    const unaffectedByEdit = original && original.type==='calibration'
+      && original.targetAmount===target && original.date===dateVal
+      && original.walletType===type && original.walletSub===sub && original.currency===currencyVal;
+    const delta = unaffectedByEdit ? original.delta : (target - walletBalanceFor(type, sub, currencyVal, editingId));
     e = {
       id: editingId || (Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
       type:'calibration', date:dateVal, time:timeVal,
@@ -3140,12 +3146,24 @@ document.getElementById('saveBtn').onclick = ()=>{
       calibrationKind: document.getElementById('fCalIsSetup').checked ? 'setup' : 'correction'
     };
   }else{
+    const original = editingId ? entries.find(x=>x.id===editingId) : null;
+    // twdAmount 是「當初那筆錢換算成台幣是多少」的歷史事實。
+    // 幣別沒變的話，不管金額有沒有被更正（例如打錯字改一改），都該沿用「這筆帳原本記錄時反推出來的匯率」去換算，
+    // 不能用今天最新的匯率——更正金額打錯，不代表「今天的匯率」才是這筆帳該用的匯率。
+    // 只有幣別真的變了（或這是全新一筆，沒有「原本的匯率」可以參考），才不得不用當下的匯率。
+    let twdAmountFinal;
+    if(original && original.currency===currencyVal && original.amount){
+      const impliedRate = original.twdAmount / original.amount;
+      twdAmountFinal = parseFloat(amount) * impliedRate;
+    } else {
+      twdAmountFinal = toTWD(amount, currencyVal);
+    }
     const base = {
       id: editingId || (Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
       date: dateVal, time: timeVal,
       amount: parseFloat(amount),
       currency: currencyVal,
-      twdAmount: toTWD(amount, currencyVal),
+      twdAmount: twdAmountFinal,
       note: noteVal
     };
     if(entryType==='transfer'){
