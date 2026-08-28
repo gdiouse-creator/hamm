@@ -91,6 +91,8 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 .type-toggle button.on[data-type="transfer"]{background:var(--gold);border-color:var(--gold);}
 .type-toggle button.on[data-type="calibration"]{background:var(--ink-soft);border-color:var(--ink-soft);}
 .btn-primary{width:100%;padding:11px;background:var(--ink);color:var(--paper);border:none;border-radius:4px;font-size:14px;letter-spacing:2px;cursor:pointer;}
+.btn-secondary{padding:11px;background:var(--card);color:var(--ink);border:1px solid var(--paper-line);border-radius:4px;font-size:13px;cursor:pointer;}
+.chip-static{display:inline-flex;align-items:center;padding:4px 10px;background:var(--card);border:1px solid var(--paper-line);border-radius:20px;font-size:12px;}
 .btn-primary:hover{background:#2b3a5c;}
 .btn-small{padding:6px 10px;font-size:12px;border:1px solid var(--paper-line);background:#fff;border-radius:4px;cursor:pointer;color:var(--ink-soft);}
 .btn-small:hover{border-color:var(--ink);color:var(--ink);}
@@ -268,6 +270,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
   <button data-tab="stats" class="active">總表</button>
   <button data-tab="entry">記帳</button>
   <button data-tab="list">記錄</button>
+  <button data-tab="split">分帳</button>
   <button data-tab="settings">設定</button>
 </nav>
 
@@ -459,6 +462,50 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
       <h2>近期紀錄</h2>
       <div id="listFilterBar" style="display:none;"></div>
       <div id="entryList"></div>
+    </div>
+  </section>
+
+  <section id="tab-split" style="display:none">
+    <div id="splitListView">
+      <div class="card">
+        <h2>分帳群組</h2>
+        <p class="hint" style="margin-top:0;">跟家人朋友出遊、聚餐分攤這類場景用的，跟你自己的記帳資料完全獨立、互不影響。</p>
+        <div id="splitGroupList"></div>
+        <div class="field" style="margin-top:12px;">
+          <label>新增群組</label>
+          <input type="text" id="newSplitGroupName" placeholder="例如：2026日本家庭旅遊">
+        </div>
+        <button class="btn-primary" id="addSplitGroupBtn">＋ 建立群組</button>
+      </div>
+    </div>
+    <div id="splitDetailView" style="display:none">
+      <div class="card">
+        <span id="backToSplitListBtn" style="cursor:pointer;text-decoration:underline;color:var(--ink-soft);font-size:13px;">← 回群組列表</span>
+        <h2 id="splitGroupTitle" style="margin-top:6px;"></h2>
+        <div id="splitMembersArea"></div>
+      </div>
+      <div class="card">
+        <h2>活動總額</h2>
+        <div id="splitBudgetArea"></div>
+      </div>
+      <div class="card" style="padding:0;">
+        <details class="settings-section">
+          <summary>結算</summary>
+          <div class="settings-body" id="splitSettlementArea"></div>
+        </details>
+      </div>
+      <div class="card">
+        <h2>新增一筆分帳</h2>
+        <div id="splitBillFormArea"></div>
+      </div>
+      <div class="card">
+        <h2>分帳明細</h2>
+        <div id="splitBillListArea"></div>
+      </div>
+      <div class="card">
+        <h2>統計</h2>
+        <div id="splitStatsArea"></div>
+      </div>
     </div>
   </section>
 
@@ -942,6 +989,12 @@ async function loadData(){
   migrateEntries();
   cleanupOtherBucket();
   migrateToCalibration();
+  try{ const v = await idbGet('ledger-split-groups'); splitGroups = v ? JSON.parse(v) : []; }
+  catch(err){ splitGroups = []; }
+  try{ const v = await idbGet('ledger-split-bills'); splitBills = v ? JSON.parse(v) : []; }
+  catch(err){ splitBills = []; }
+  try{ const v = await idbGet('ledger-split-settlements'); splitSettlements = v ? JSON.parse(v) : []; }
+  catch(err){ splitSettlements = []; }
   setStatus('','已存於本機');
   renderAll();
   renderExportReminderSettings();
@@ -1311,44 +1364,44 @@ document.getElementById('fAmount').addEventListener('input', updateCurrencyNote)
 
 const CALC_BUTTONS = ['1','2','3','4','5','6','7','8','9','0','.','C','÷','×','−','+','⌫','='];
 const CALC_OP_MAP = { '÷':'/', '×':'*', '−':'-', '+':'+' };
-let calcExpr = '';
-function calcRenderButtons(){
-  const grid = document.getElementById('calcGrid');
-  if(!grid) return;
+function setupMiniCalc(displayId, gridId, targetAmountId){
+  const grid = document.getElementById(gridId);
+  const displayEl = document.getElementById(displayId);
+  if(!grid || !displayEl) return;
+  let expr = '';
   grid.innerHTML = CALC_BUTTONS.map(b=>{
     let cls = '';
     if(b==='=') cls='eq'; else if(b==='C') cls='clr'; else if(['÷','×','−','+'].includes(b)) cls='op';
     return `<button type="button" class="${cls}" data-calc="${b}">${b}</button>`;
   }).join('');
   grid.querySelectorAll('button').forEach(btn=>{
-    btn.addEventListener('click', ()=> calcPress(btn.dataset.calc));
+    btn.addEventListener('click', ()=>{
+      const val = btn.dataset.calc;
+      if(val==='C'){ expr=''; }
+      else if(val==='⌫'){ expr = expr.slice(0,-1); }
+      else if(val==='='){
+        try{
+          if(!expr || !/^[0-9+\-*/. ]+$/.test(expr)) throw new Error('invalid');
+          const result = Function('"use strict";return ('+expr+')')();
+          if(typeof result !== 'number' || !isFinite(result)) throw new Error('invalid result');
+          expr = String(Math.round(result*100)/100);
+          const targetEl = document.getElementById(targetAmountId);
+          if(targetEl){ targetEl.value = expr; targetEl.dispatchEvent(new Event('input')); }
+        }catch(err){
+          expr = '';
+          displayEl.textContent = '錯誤';
+          return;
+        }
+      }
+      else{
+        const mapped = CALC_OP_MAP[val] !== undefined ? CALC_OP_MAP[val] : val;
+        expr += mapped;
+      }
+      displayEl.textContent = expr || '0';
+    });
   });
 }
-function calcPress(val){
-  const displayEl = document.getElementById('calcDisplay');
-  if(val==='C'){ calcExpr=''; }
-  else if(val==='⌫'){ calcExpr = calcExpr.slice(0,-1); }
-  else if(val==='='){
-    try{
-      if(!calcExpr || !/^[0-9+\-*/. ]+$/.test(calcExpr)) throw new Error('invalid');
-      const result = Function('"use strict";return ('+calcExpr+')')();
-      if(typeof result !== 'number' || !isFinite(result)) throw new Error('invalid result');
-      calcExpr = String(Math.round(result*100)/100);
-      document.getElementById('fAmount').value = calcExpr;
-      document.getElementById('fAmount').dispatchEvent(new Event('input'));
-    }catch(err){
-      calcExpr = '';
-      displayEl.textContent = '錯誤';
-      return;
-    }
-  }
-  else{
-    const mapped = CALC_OP_MAP[val] !== undefined ? CALC_OP_MAP[val] : val;
-    calcExpr += mapped;
-  }
-  displayEl.textContent = calcExpr || '0';
-}
-calcRenderButtons();
+setupMiniCalc('calcDisplay','calcGrid','fAmount');
 
 function walletBalanceText(type, sub){
   const balances = computeWalletBalances(type, sub);
@@ -1998,10 +2051,13 @@ function computeCategoryAggForRange(mode, startDate, endDate){
 }
 
 function switchTab(name){
+  // 如果在「分帳同步」流程中途離開了記帳分頁卻沒按存檔，視為取消，避免之後隨便存一筆別的紀錄被誤標記成同步完成。
+  if(name!=='entry' && typeof pendingSplitSyncBillId!=='undefined' && pendingSplitSyncBillId){ pendingSplitSyncBillId = null; }
+  if(name!=='entry' && typeof pendingSplitSettlementId!=='undefined' && pendingSplitSettlementId){ pendingSplitSettlementId = null; }
   document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
   const btn = document.querySelector(`nav button[data-tab="${name}"]`);
   if(btn) btn.classList.add('active');
-  ['stats','entry','list','settings'].forEach(t=>{
+  ['stats','entry','list','split','settings'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name) ? 'block' : 'none';
   });
 }
@@ -3093,6 +3149,7 @@ document.querySelectorAll('nav button').forEach(btn=>{
     if(btn.dataset.tab==='stats') renderStats();
     if(btn.dataset.tab==='list') renderList();
     if(btn.dataset.tab==='entry') { refreshNow(); updateCurrencyNote(); refreshWalletBalanceNotes(); }
+    if(btn.dataset.tab==='split') renderSplitTab();
   };
 });
 
@@ -3237,6 +3294,17 @@ document.getElementById('saveBtn').onclick = ()=>{
     document.getElementById('saveBtn').textContent = '記 一 筆';
   }else{
     entries.push(e);
+    // 如果這筆是從「分帳」頁面帶過來要同步的，存檔成功後回頭在那筆分帳紀錄上做個標記，避免同一筆被重複同步。
+    if(pendingSplitSyncBillId){
+      const bill = splitBills.find(b=>b.id===pendingSplitSyncBillId);
+      if(bill){ bill.syncedEntryId = e.id; saveSplitBills(); }
+      pendingSplitSyncBillId = null;
+    }
+    if(pendingSplitSettlementId){
+      const settlement = splitSettlements.find(s=>s.id===pendingSplitSettlementId);
+      if(settlement){ settlement.syncedEntryId = e.id; saveSplitSettlements(); }
+      pendingSplitSettlementId = null;
+    }
   }
   saveEntries();
   renderList(); renderStats();
@@ -3467,6 +3535,459 @@ document.getElementById('importCsvBtn').onclick = ()=>{
 
 const chartLib = document.getElementById('chartjs-lib');
 if(chartLib) chartLib.addEventListener('load', ()=>{ renderStats(); });
+
+// ══════════════ 分帳（跟主帳本資料完全獨立，各自存各自的 IndexedDB key，互不影響）══════════════
+let splitGroups = [];
+let splitBills = [];
+let splitSettlements = []; // 已經確實結清過的紀錄，跟splitBills分開存，結算計算時會拿來扣抵，避免同一筆一直重複出現在建議結清清單裡
+let currentSplitGroupId = null;
+let splitBillDraftMethod = 'even'; // 'even' | 'custom'
+let pendingSplitSyncBillId = null; // 從分帳頁面帶去記帳表單、等使用者按下「記一筆」後要回頭標記的那筆分帳紀錄id
+const SPLIT_FUND_PAYER = '__fund__'; // 「誰先墊的」的特殊值，代表這筆是直接從共同基金支出，不是某個成員自己先墊的
+async function saveSplitGroups(){ try{ await idbSet('ledger-split-groups', JSON.stringify(splitGroups)); }catch(err){} }
+async function saveSplitBills(){ try{ await idbSet('ledger-split-bills', JSON.stringify(splitBills)); }catch(err){} }
+async function saveSplitSettlements(){ try{ await idbSet('ledger-split-settlements', JSON.stringify(splitSettlements)); }catch(err){} }
+
+function computeSettlement(groupId){
+  const group = splitGroups.find(g=>g.id===groupId);
+  if(!group) return { balances:{}, transactions:[] };
+  const bills = splitBills.filter(b=>b.groupId===groupId);
+  const balances = {};
+  group.members.forEach(m=> balances[m] = 0);
+  bills.forEach(b=>{
+    // 共同基金直接付的（b.paidBy === SPLIT_FUND_PAYER），完全不計入「誰欠誰」的結算——
+    // 因為這筆錢已經直接從大家共同出的那筆基金裡扣掉了，不是某個人自己先墊的，沒有「該還給誰」這回事。
+    // 這種支出交給「活動總額」那張卡片去追蹤剩餘多少就好，這裡不重複計算，避免算出「明明基金已經付過、卻還要互相還錢」這種假債務。
+    if(b.paidBy===SPLIT_FUND_PAYER) return;
+    const twdAmt = (typeof b.twdAmount==='number') ? b.twdAmount : toTWD(b.amount, b.currency);
+    const rate = b.amount ? twdAmt/b.amount : 1;
+    if(balances[b.paidBy]!==undefined) balances[b.paidBy] += twdAmt;
+    Object.entries(b.splits||{}).forEach(([member, share])=>{
+      if(balances[member]!==undefined) balances[member] -= share*rate;
+    });
+  });
+  // 已經確實結清過的紀錄，要在算「還欠多少」之前先扣掉，不然結清過的錢還是會一直出現在建議清單裡
+  splitSettlements.filter(s=>s.groupId===groupId).forEach(s=>{
+    if(balances[s.from]!==undefined) balances[s.from] += s.amount; // 付錢的人，欠的變少（往0靠近）
+    if(balances[s.to]!==undefined) balances[s.to] -= s.amount; // 收錢的人，該收的變少
+  });
+  // 債務簡化：把「該收錢的人」跟「該付錢的人」互相配對，用最少的轉帳次數結清
+  const creditors = Object.entries(balances).filter(([,v])=>v>0.5).map(([m,v])=>({m,v})).sort((a,b)=>b.v-a.v);
+  const debtors = Object.entries(balances).filter(([,v])=>v<-0.5).map(([m,v])=>({m,v:-v})).sort((a,b)=>b.v-a.v);
+  const transactions = [];
+  let ci=0, di=0;
+  while(ci<creditors.length && di<debtors.length){
+    const pay = Math.min(creditors[ci].v, debtors[di].v);
+    if(pay>0.5) transactions.push({ from: debtors[di].m, to: creditors[ci].m, amount: pay });
+    creditors[ci].v -= pay; debtors[di].v -= pay;
+    if(creditors[ci].v<=0.5) ci++;
+    if(debtors[di].v<=0.5) di++;
+  }
+  return { balances, transactions };
+}
+
+function renderSplitTab(){
+  if(currentSplitGroupId && splitGroups.find(g=>g.id===currentSplitGroupId)){
+    document.getElementById('splitListView').style.display = 'none';
+    document.getElementById('splitDetailView').style.display = 'block';
+    renderSplitGroupDetail(currentSplitGroupId);
+  } else {
+    currentSplitGroupId = null;
+    document.getElementById('splitListView').style.display = 'block';
+    document.getElementById('splitDetailView').style.display = 'none';
+    renderSplitGroupList();
+  }
+}
+function renderSplitGroupList(){
+  const wrap = document.getElementById('splitGroupList');
+  if(splitGroups.length===0){ wrap.innerHTML = '<div class="empty">還沒有任何分帳群組</div>'; return; }
+  wrap.innerHTML = splitGroups.map(g=>{
+    const billCount = splitBills.filter(b=>b.groupId===g.id).length;
+    return `<div class="acc-sub-row clickable" data-gid="${g.id}" style="padding:10px 0;">
+      <span>👥 ${g.name}</span>
+      <span class="hint" style="margin:0;">${g.members.length} 人・${billCount} 筆</span>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-gid]').forEach(row=>{
+    row.onclick = ()=>{ currentSplitGroupId = row.dataset.gid; renderSplitTab(); };
+  });
+}
+document.getElementById('addSplitGroupBtn').onclick = ()=>{
+  const inp = document.getElementById('newSplitGroupName');
+  const name = inp.value.trim();
+  if(!name){ alert('請輸入群組名稱'); return; }
+  const group = { id: Date.now().toString(36)+Math.random().toString(36).slice(2,6), name, members: [], createdAt: new Date().toISOString() };
+  splitGroups.push(group);
+  saveSplitGroups();
+  inp.value = '';
+  currentSplitGroupId = group.id;
+  renderSplitTab();
+};
+document.getElementById('backToSplitListBtn').onclick = ()=>{ currentSplitGroupId = null; renderSplitTab(); };
+
+function renderSplitGroupDetail(groupId){
+  const group = splitGroups.find(g=>g.id===groupId);
+  if(!group) return;
+  document.getElementById('splitGroupTitle').textContent = group.name;
+
+  // 成員管理
+  const memberWrap = document.getElementById('splitMembersArea');
+  memberWrap.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+      ${group.members.map(m=>`<span class="chip-static">${m}<span class="chip-remove" data-member="${m}" style="cursor:pointer;margin-left:4px;">✕</span></span>`).join('') || '<span class="hint">尚無成員</span>'}
+    </div>
+    <details class="settings-section">
+      <summary>成員設定</summary>
+      <div class="settings-body">
+        <div class="row2">
+          <input type="text" id="newMemberInput" placeholder="輸入姓名">
+          <button class="btn-secondary" id="addMemberBtn">＋ 加入成員</button>
+        </div>
+        ${group.members.length>0 ? `
+        <div class="field" style="margin-top:10px;">
+          <label>這個群組裡，哪一位是你自己？（設定後才能把你的份額同步到記帳）</label>
+          <select id="splitMyselfSelect">
+            <option value="">－ 尚未設定 －</option>
+            ${group.members.map(m=>`<option value="${m}" ${group.myself===m?'selected':''}>${m}</option>`).join('')}
+          </select>
+        </div>` : ''}
+        <span id="deleteSplitGroupBtn" class="hint" style="text-decoration:underline;cursor:pointer;display:inline-block;margin-top:10px;">刪除這個群組</span>
+      </div>
+    </details>
+  `;
+  document.getElementById('addMemberBtn').onclick = ()=>{
+    const inp = document.getElementById('newMemberInput');
+    const name = inp.value.trim();
+    if(!name){ return; }
+    if(group.members.includes(name)){ alert('這個成員已經加過了'); return; }
+    group.members.push(name);
+    saveSplitGroups();
+    renderSplitGroupDetail(groupId);
+  };
+  const myselfSelect = document.getElementById('splitMyselfSelect');
+  if(myselfSelect) myselfSelect.onchange = (ev)=>{ group.myself = ev.target.value || null; saveSplitGroups(); renderSplitGroupDetail(groupId); };
+  memberWrap.querySelectorAll('.chip-remove').forEach(btn=>{
+    btn.onclick = ()=>{
+      const usedInBills = splitBills.some(b=>b.groupId===groupId && (b.paidBy===btn.dataset.member || (b.splits&&b.splits[btn.dataset.member]!==undefined)));
+      if(usedInBills){ alert('這個成員已經有分帳紀錄，沒辦法移除；要移除的話請先刪除相關的分帳紀錄。'); return; }
+      group.members = group.members.filter(m=>m!==btn.dataset.member);
+      if(group.myself===btn.dataset.member) group.myself = null;
+      saveSplitGroups();
+      renderSplitGroupDetail(groupId);
+    };
+  });
+  document.getElementById('deleteSplitGroupBtn').onclick = ()=>{
+    if(!confirm(`確定要刪除整個群組「${group.name}」嗎？裡面所有的分帳紀錄也會一併刪除，無法復原。`)) return;
+    splitGroups = splitGroups.filter(g=>g.id!==groupId);
+    splitBills = splitBills.filter(b=>b.groupId!==groupId);
+    saveSplitGroups(); saveSplitBills();
+    currentSplitGroupId = null;
+    renderSplitTab();
+  };
+
+  renderSplitBudget(groupId);
+  renderSplitSettlement(groupId);
+  renderSplitBillForm(groupId);
+  renderSplitBillList(groupId);
+  renderSplitStats(groupId);
+}
+
+function renderSplitStats(groupId){
+  const wrap = document.getElementById('splitStatsArea');
+  const group = splitGroups.find(g=>g.id===groupId);
+  const bills = splitBills.filter(b=>b.groupId===groupId);
+  if(!group || bills.length===0){ wrap.innerHTML = '<div class="empty">還沒有任何分帳紀錄可以統計</div>'; return; }
+
+  const totalTWD = bills.reduce((s,b)=> s + ((typeof b.twdAmount==='number')?b.twdAmount:toTWD(b.amount,b.currency)), 0);
+  const avgPerBill = totalTWD / bills.length;
+
+  // 依付款人排行（含共同基金）
+  const byPayer = {};
+  bills.forEach(b=>{
+    const twdAmt = (typeof b.twdAmount==='number') ? b.twdAmount : toTWD(b.amount,b.currency);
+    const key = b.paidBy===SPLIT_FUND_PAYER ? '🏦 共同基金' : b.paidBy;
+    byPayer[key] = (byPayer[key]||0) + twdAmt;
+  });
+  const payerItems = Object.entries(byPayer).sort((a,b)=>b[1]-a[1]);
+  const payerMax = Math.max(...payerItems.map(([,v])=>v), 1);
+
+  // 依日期分佈
+  const byDate = {};
+  bills.forEach(b=>{
+    const twdAmt = (typeof b.twdAmount==='number') ? b.twdAmount : toTWD(b.amount,b.currency);
+    byDate[b.date] = (byDate[b.date]||0) + twdAmt;
+  });
+  const dateItems = Object.entries(byDate).sort((a,b)=> a[0].localeCompare(b[0]));
+  const dateMax = Math.max(...dateItems.map(([,v])=>v), 1);
+
+  wrap.innerHTML = `
+    <p class="hint" style="margin-top:0;">總支出 ${totalTWD.toFixed(0)} 元・共 ${bills.length} 筆・平均每筆 ${avgPerBill.toFixed(0)} 元</p>
+    <p class="hint" style="margin:10px 0 4px;font-weight:700;">依付款人</p>
+    ${payerItems.map(([name,v])=>`
+      <div class="bd-row">
+        <div class="bd-top"><span class="bd-label">${name}</span><span class="bd-amt mono">${v.toFixed(0)}</span></div>
+        <div class="bd-track"><div class="bd-fill neutral" style="width:${(v/payerMax*100)}%"></div></div>
+      </div>`).join('')}
+    <p class="hint" style="margin:14px 0 4px;font-weight:700;">依日期</p>
+    ${dateItems.map(([date,v])=>`
+      <div class="bd-row">
+        <div class="bd-top"><span class="bd-label">${date}</span><span class="bd-amt mono">${v.toFixed(0)}</span></div>
+        <div class="bd-track"><div class="bd-fill expense" style="width:${(v/dateMax*100)}%"></div></div>
+      </div>`).join('')}
+  `;
+}
+
+function renderSplitBudget(groupId){
+  const group = splitGroups.find(g=>g.id===groupId);
+  const wrap = document.getElementById('splitBudgetArea');
+  if(!group) return;
+  const bills = splitBills.filter(b=>b.groupId===groupId);
+  const spentTWD = bills.reduce((s,b)=> s + ((typeof b.twdAmount==='number') ? b.twdAmount : toTWD(b.amount,b.currency)), 0);
+
+  if(!group.budget){
+    wrap.innerHTML = `
+      <p class="hint" style="margin-top:0;">還沒設定這次活動的總預算（選填，不設定也不影響記帳跟結算）。</p>
+      <div class="row2">
+        <input type="number" id="splitBudgetAmountInput" placeholder="總預算金額">
+        <select id="splitBudgetCurrencyInput">${config.currencies.map(c=>`<option value="${c}">${currencyDisplayName(c)}</option>`).join('')}</select>
+      </div>
+      <button class="btn-secondary" id="setSplitBudgetBtn" style="margin-top:8px;">設定總預算</button>
+    `;
+    document.getElementById('setSplitBudgetBtn').onclick = ()=>{
+      const amount = parseFloat(document.getElementById('splitBudgetAmountInput').value);
+      const currency = document.getElementById('splitBudgetCurrencyInput').value;
+      if(!amount || amount<=0){ alert('請輸入正確的預算金額'); return; }
+      group.budget = { amount, currency };
+      saveSplitGroups();
+      renderSplitBudget(groupId);
+      renderSplitBillForm(groupId); // 有了預算才會出現「共同基金」這個付款選項，要重新渲染表單才看得到
+    };
+    return;
+  }
+
+  const budgetTWD = toTWD(group.budget.amount, group.budget.currency);
+  const remainingTWD = budgetTWD - spentTWD;
+  const pct = budgetTWD>0 ? Math.min(100, (spentTWD/budgetTWD*100)) : 0;
+  const overspent = remainingTWD < 0;
+  wrap.innerHTML = `
+    <div class="bd-row">
+      <div class="bd-top"><span class="bd-label">總預算</span><span class="bd-amt mono">${group.budget.amount.toFixed(0)} ${currencyDisplayName(group.budget.currency)}</span></div>
+    </div>
+    <div class="bd-row">
+      <div class="bd-top"><span class="bd-label">已花費</span><span class="bd-amt mono">${spentTWD.toFixed(0)} ${currencyDisplayName('TWD')}</span></div>
+      <div class="bd-track"><div class="bd-fill ${overspent?'expense':'neutral'}" style="width:${pct}%"></div></div>
+    </div>
+    <div class="bd-row">
+      <div class="bd-top"><span class="bd-label">剩餘</span><span class="bd-amt mono" style="color:${overspent?'var(--stamp-red)':'var(--stamp-green)'}">${overspent?'已超支 ':''}${Math.abs(remainingTWD).toFixed(0)} ${currencyDisplayName('TWD')}</span></div>
+    </div>
+    <span id="editSplitBudgetBtn" class="hint" style="text-decoration:underline;cursor:pointer;display:inline-block;margin-top:8px;">重新設定總預算</span>
+  `;
+  document.getElementById('editSplitBudgetBtn').onclick = ()=>{
+    if(!confirm('確定要重新設定總預算嗎？')) return;
+    group.budget = null;
+    saveSplitGroups();
+    renderSplitBudget(groupId);
+    renderSplitBillForm(groupId); // 預算被清空了，「共同基金」這個付款選項也該跟著消失
+  };
+}
+function renderSplitSettlement(groupId){
+  const wrap = document.getElementById('splitSettlementArea');
+  const group = splitGroups.find(g=>g.id===groupId);
+  if(!group || group.members.length===0){ wrap.innerHTML = '<div class="empty">請先加入成員</div>'; return; }
+  const { balances, transactions } = computeSettlement(groupId);
+  const balanceHtml = group.members.map(m=>{
+    const v = balances[m]||0;
+    const color = v>0.5 ? 'var(--stamp-green)' : v<-0.5 ? 'var(--stamp-red)' : 'var(--ink-soft)';
+    const label = v>0.5 ? `該收 ${v.toFixed(0)}` : v<-0.5 ? `該付 ${(-v).toFixed(0)}` : '已結清';
+    return `<div class="bd-row"><div class="bd-top"><span class="bd-label">${m}</span><span class="bd-amt mono" style="color:${color}">${label}</span></div></div>`;
+  }).join('');
+  const txHtml = transactions.length===0 ? '<div class="empty" style="margin-top:8px;">目前不需要任何轉帳，帳已經平了</div>' : `
+    <p class="hint" style="margin:10px 0 4px;">建議這樣結清（已用最少轉帳次數計算）：</p>
+    ${transactions.map((t,i)=>`<div class="acc-sub-row"><span>${t.from} → ${t.to}</span><span class="mono">${t.amount.toFixed(0)} <span class="acc-filter" data-settleidx="${i}" style="cursor:pointer;text-decoration:underline;margin-left:6px;">結清</span></span></div>`).join('')}
+  `;
+  wrap.innerHTML = balanceHtml + txHtml;
+  wrap.querySelectorAll('[data-settleidx]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const t = transactions[parseInt(btn.dataset.settleidx,10)];
+      if(t) handleSplitSettle(t, groupId);
+    };
+  });
+}
+function handleSplitSettle(t, groupId){
+  const group = splitGroups.find(g=>g.id===groupId);
+  if(!confirm(`確定要記錄「${t.from} 已經付給 ${t.to} ${t.amount.toFixed(0)} 元」這筆結清嗎？`)) return;
+  const settlement = {
+    id: Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+    groupId, date: todayLocal(), from: t.from, to: t.to, amount: t.amount
+  };
+  splitSettlements.push(settlement);
+  saveSplitSettlements();
+
+  const myself = group ? group.myself : null;
+  if(myself && t.from===myself){
+    // 我是付錢的那一方：這筆錢從我口袋出去，對我來說是一筆支出
+    startSplitSettlementSync(settlement, groupId, 'expense', `結清・${group.name}：付給${t.to}`);
+  } else if(myself && t.to===myself){
+    // 我是收錢的那一方：這筆錢進到我口袋，對我來說是一筆收入
+    startSplitSettlementSync(settlement, groupId, 'income', `結清・${group.name}：${t.from}還給我`);
+  } else {
+    // 跟我無關的兩個人互相結清，不影響我的個人記帳
+    renderSplitGroupDetail(groupId);
+  }
+}
+let pendingSplitSettlementId = null;
+function startSplitSettlementSync(settlement, groupId, type, note){
+  pendingSplitSettlementId = settlement.id;
+  switchTab('entry');
+  setEntryType(type);
+  document.getElementById('fDate').value = settlement.date;
+  document.getElementById('fAmount').value = settlement.amount;
+  document.getElementById('fCurrency').value = 'TWD';
+  document.getElementById('fCurrency').dispatchEvent(new Event('change'));
+  document.getElementById('fNote').value = note;
+  refreshNow();
+  document.getElementById('fDate').value = settlement.date;
+  updateCurrencyNote();
+  alert(`已經幫你把金額、日期、備註填好了（這筆結清是${type==='expense'?'你付出去的錢':'你收到的錢'}）。選好類別跟錢包，按下「記一筆」就會完成同步。`);
+  document.getElementById('tab-entry').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function renderSplitBillForm(groupId){
+  const group = splitGroups.find(g=>g.id===groupId);
+  const wrap = document.getElementById('splitBillFormArea');
+  if(!group || group.members.length===0){ wrap.innerHTML = '<div class="empty">請先加入成員，才能記分帳</div>'; return; }
+  wrap.innerHTML = `
+    <div class="field"><label>說明</label><input type="text" id="splitBillDesc" placeholder="例如：聖誕大餐"></div>
+    <div class="row2">
+      <div class="field"><label>金額</label><input type="number" id="splitBillAmount" placeholder="0"></div>
+      <div class="field"><label>幣別</label><select id="splitBillCurrency">${config.currencies.map(c=>`<option value="${c}">${currencyDisplayName(c)}</option>`).join('')}</select></div>
+    </div>
+    <details class="mini-calc-wrap">
+      <summary>🖩 小算盤（算完自動帶入金額）</summary>
+      <div class="mini-calc">
+        <div class="mini-calc-display mono" id="splitCalcDisplay">0</div>
+        <div class="mini-calc-grid" id="splitCalcGrid"></div>
+      </div>
+    </details>
+    <div class="field"><label>誰先墊的</label><select id="splitBillPaidBy">
+      ${group.members.map(m=>`<option value="${m}">${m}</option>`).join('')}
+      ${group.budget ? `<option value="${SPLIT_FUND_PAYER}">🏦 共同基金（直接從活動總額支出，不是某個人先墊的）</option>` : ''}
+    </select></div>
+    <div class="chip-group" id="splitMethodToggle">
+      <button data-method="even" class="${splitBillDraftMethod==='even'?'on':''}">平均分攤</button>
+      <button data-method="custom" class="${splitBillDraftMethod==='custom'?'on':''}">自訂每人金額</button>
+    </div>
+    <div id="splitCustomAmountsArea" style="margin-top:8px;${splitBillDraftMethod==='custom'?'':'display:none;'}">
+      ${group.members.map(m=>`<div class="row2"><label style="align-self:center;">${m}</label><input type="number" class="split-custom-input" data-member="${m}" placeholder="0"></div>`).join('')}
+      <p class="hint" id="splitCustomSumHint"></p>
+    </div>
+    <button class="btn-primary" id="addSplitBillBtn" style="margin-top:10px;">記這一筆分帳</button>
+  `;
+  setupMiniCalc('splitCalcDisplay','splitCalcGrid','splitBillAmount');
+  document.querySelectorAll('#splitMethodToggle button').forEach(btn=>{
+    btn.onclick = ()=>{ splitBillDraftMethod = btn.dataset.method; renderSplitBillForm(groupId); };
+  });
+  document.getElementById('addSplitBillBtn').onclick = ()=>{
+    const desc = document.getElementById('splitBillDesc').value.trim();
+    const amount = parseFloat(document.getElementById('splitBillAmount').value);
+    const currency = document.getElementById('splitBillCurrency').value;
+    const paidBy = document.getElementById('splitBillPaidBy').value;
+    if(!amount || amount<=0){ alert('請輸入正確的金額'); return; }
+    let splits = {};
+    if(splitBillDraftMethod==='even'){
+      const n = group.members.length;
+      const base = Math.floor((amount/n)*100)/100;
+      let remainder = Math.round((amount - base*n)*100)/100;
+      group.members.forEach((m,i)=>{ splits[m] = base + (i < Math.round(remainder*100) ? 0.01 : 0); });
+      // 簡化處理：多退少補全部給第一個人，避免四捨五入誤差讓總和對不上
+      const sumNow = Object.values(splits).reduce((a,b)=>a+b,0);
+      const diff = Math.round((amount - sumNow)*100)/100;
+      splits[group.members[0]] = Math.round((splits[group.members[0]] + diff)*100)/100;
+    } else {
+      let sum = 0;
+      group.members.forEach(m=>{
+        const v = parseFloat(document.querySelector(`.split-custom-input[data-member="${m}"]`).value) || 0;
+        splits[m] = v; sum += v;
+      });
+      if(Math.abs(sum - amount) > 0.5){ alert(`自訂金額加總（${sum}）跟總金額（${amount}）對不上，請重新確認每人金額。`); return; }
+    }
+    const twdAmount = toTWD(amount, currency);
+    splitBills.push({
+      id: Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+      groupId, date: todayLocal(), description: desc, amount, currency, twdAmount, paidBy, splitMethod: splitBillDraftMethod, splits
+    });
+    saveSplitBills();
+    renderSplitGroupDetail(groupId);
+  };
+  const sumHintFn = ()=>{
+    const amount = parseFloat(document.getElementById('splitBillAmount').value) || 0;
+    let sum = 0;
+    document.querySelectorAll('.split-custom-input').forEach(inp=>{ sum += parseFloat(inp.value)||0; });
+    const hintEl = document.getElementById('splitCustomSumHint');
+    if(hintEl) hintEl.textContent = `目前加總：${sum.toFixed(0)}（總金額：${amount.toFixed(0)}）`;
+  };
+  document.querySelectorAll('.split-custom-input').forEach(inp=> inp.oninput = sumHintFn);
+  const amountInp = document.getElementById('splitBillAmount');
+  if(amountInp) amountInp.oninput = sumHintFn;
+}
+
+function renderSplitBillList(groupId){
+  const wrap = document.getElementById('splitBillListArea');
+  const group = splitGroups.find(g=>g.id===groupId);
+  const bills = splitBills.filter(b=>b.groupId===groupId).sort((a,b)=> b.date.localeCompare(a.date));
+  if(bills.length===0){ wrap.innerHTML = '<div class="empty">還沒有任何分帳紀錄</div>'; return; }
+  const myself = group ? group.myself : null;
+  wrap.innerHTML = bills.map(b=>{
+    // 只有「我自己是先墊錢的那個人」才提供同步——因為只有這種情況，我的錢包在當下才真的被扣了錢。
+    // 別人先墊的話，我的錢包這時候根本沒變化，不該生出一筆還沒真的花掉的支出；等我真的把錢還給對方，那才是該記的時間點。
+    let syncHtml = '';
+    if(myself && b.paidBy===myself){
+      syncHtml = b.syncedEntryId
+        ? `<div class="hint" style="margin:4px 0 0;color:var(--stamp-green);">✓ 我墊付的 ${b.amount.toFixed(0)} ${currencyDisplayName(b.currency)} 已加入記帳</div>`
+        : `<div class="hint" style="margin:4px 0 0;">這筆是我先墊的 <span class="acc-filter" data-syncbill="${b.id}" style="cursor:pointer;text-decoration:underline;">＋把墊付的全額加入我的記帳</span></div>`;
+    }
+    return `<div class="acc-sub-row" style="flex-direction:column;align-items:stretch;">
+      <div style="display:flex;justify-content:space-between;">
+        <span>${b.description||'（無說明）'}・${b.paidBy===SPLIT_FUND_PAYER?'🏦 共同基金支出':b.paidBy+'先付'}<br><span class="hint" style="margin:0;">${b.date}</span></span>
+        <span class="mono">${b.amount.toFixed(0)} ${currencyDisplayName(b.currency)} <span class="del-sub" data-billid="${b.id}" style="margin-left:6px;">刪除</span></span>
+      </div>
+      ${syncHtml}
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-billid]').forEach(btn=>{
+    btn.onclick = ()=>{
+      if(!confirm('確定要刪除這筆分帳紀錄嗎？')) return;
+      splitBills = splitBills.filter(b=>b.id!==btn.dataset.billid);
+      saveSplitBills();
+      renderSplitGroupDetail(groupId);
+    };
+  });
+  wrap.querySelectorAll('[data-syncbill]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const bill = splitBills.find(b=>b.id===btn.dataset.syncbill);
+      if(!bill) return;
+      startSplitBillSync(bill, groupId);
+    };
+  });
+}
+
+function startSplitBillSync(bill, groupId){
+  const group = splitGroups.find(g=>g.id===groupId);
+  if(!group || group.myself !== bill.paidBy){ alert('只有「我先墊的」那幾筆才能同步，因為只有那種情況下，我的錢包在當下才真的被扣了錢。'); return; }
+  pendingSplitSyncBillId = bill.id;
+  switchTab('entry');
+  setEntryType('expense');
+  document.getElementById('fDate').value = bill.date;
+  document.getElementById('fAmount').value = bill.amount; // 同步「我墊付的全額」，不是我的份額——因為錢包當下實際上是被扣了全額
+  document.getElementById('fCurrency').value = bill.currency;
+  document.getElementById('fCurrency').dispatchEvent(new Event('change'));
+  document.getElementById('fNote').value = `分帳・${group.name}${bill.description ? '：'+bill.description : ''}（我先墊付全額，其他人的份額之後會還給我）`;
+  refreshNow();
+  document.getElementById('fDate').value = bill.date; // refreshNow()會把日期重設成今天，這裡再蓋回帳單原本的日期
+  updateCurrencyNote();
+  alert('已經幫你把「墊付的全額」、日期、備註填好了（不是你的份額，因為你的錢包當下實際上被扣了全額）。選好類別跟錢包，按下「記一筆」就會完成同步。');
+  document.getElementById('tab-entry').scrollIntoView({ behavior:'smooth', block:'start' });
+}
 
 refreshNow();
 loadData();
