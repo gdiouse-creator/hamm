@@ -454,6 +454,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
 
       <div class="field"><label>備註</label><input type="text" id="fNote" placeholder="選填"></div>
       <button class="btn-primary" id="saveBtn">記 一 筆</button>
+      <button class="btn-secondary" id="cancelEditBtn" style="width:100%;margin-top:8px;display:none;">取消更新，改回新增一筆</button>
     </div>
   </section>
 
@@ -2054,6 +2055,7 @@ function switchTab(name){
   // 如果在「分帳同步」流程中途離開了記帳分頁卻沒按存檔，視為取消，避免之後隨便存一筆別的紀錄被誤標記成同步完成。
   if(name!=='entry' && typeof pendingSplitSyncBillId!=='undefined' && pendingSplitSyncBillId){ pendingSplitSyncBillId = null; }
   if(name!=='entry' && typeof pendingSplitSettlementId!=='undefined' && pendingSplitSettlementId){ pendingSplitSettlementId = null; }
+  if(name!=='split' && typeof editingSplitBillId!=='undefined' && editingSplitBillId){ editingSplitBillId = null; }
   document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
   const btn = document.querySelector(`nav button[data-tab="${name}"]`);
   if(btn) btn.classList.add('active');
@@ -3207,9 +3209,25 @@ function startEditEntry(id){
     document.getElementById('fLocation').value = e.location || '';
   }
   document.getElementById('saveBtn').textContent = '更 新 這 筆';
+  document.getElementById('cancelEditBtn').style.display = 'block';
   updateCurrencyNote();
   refreshWalletBalanceNotes();
 }
+function cancelEditEntry(){
+  // 純粹放棄這次編輯、退回新增模式，完全不會動到原本那筆紀錄的任何資料。
+  editingId = null;
+  document.getElementById('saveBtn').textContent = '記 一 筆';
+  document.getElementById('cancelEditBtn').style.display = 'none';
+  document.getElementById('fAmount').value = '';
+  document.getElementById('fLocation').value = '';
+  document.getElementById('fNote').value = '';
+  const calCheckbox = document.getElementById('fCalIsSetup');
+  if(calCheckbox) calCheckbox.checked = false;
+  refreshNow();
+  updateCurrencyNote();
+  refreshWalletBalanceNotes();
+}
+document.getElementById('cancelEditBtn').onclick = cancelEditEntry;
 
 document.getElementById('saveBtn').onclick = ()=>{
   const amount = document.getElementById('fAmount').value;
@@ -3292,6 +3310,7 @@ document.getElementById('saveBtn').onclick = ()=>{
     if(idx>=0) entries[idx] = e;
     editingId = null;
     document.getElementById('saveBtn').textContent = '記 一 筆';
+    document.getElementById('cancelEditBtn').style.display = 'none';
   }else{
     entries.push(e);
     // 如果這筆是從「分帳」頁面帶過來要同步的，存檔成功後回頭在那筆分帳紀錄上做個標記，避免同一筆被重複同步。
@@ -3543,6 +3562,7 @@ let splitSettlements = []; // 已經確實結清過的紀錄，跟splitBills分�
 let currentSplitGroupId = null;
 let splitBillDraftMethod = 'even'; // 'even' | 'custom'
 let pendingSplitSyncBillId = null; // 從分帳頁面帶去記帳表單、等使用者按下「記一筆」後要回頭標記的那筆分帳紀錄id
+let editingSplitBillId = null; // 正在編輯中的分帳紀錄id，null代表現在是「新增」模式
 const SPLIT_FUND_PAYER = '__fund__'; // 「誰先墊的」的特殊值，代表這筆是直接從共同基金支出，不是某個成員自己先墊的
 async function saveSplitGroups(){ try{ await idbSet('ledger-split-groups', JSON.stringify(splitGroups)); }catch(err){} }
 async function saveSplitBills(){ try{ await idbSet('ledger-split-bills', JSON.stringify(splitBills)); }catch(err){} }
@@ -3609,7 +3629,7 @@ function renderSplitGroupList(){
     </div>`;
   }).join('');
   wrap.querySelectorAll('[data-gid]').forEach(row=>{
-    row.onclick = ()=>{ currentSplitGroupId = row.dataset.gid; renderSplitTab(); };
+    row.onclick = ()=>{ currentSplitGroupId = row.dataset.gid; editingSplitBillId = null; renderSplitTab(); };
   });
 }
 document.getElementById('addSplitGroupBtn').onclick = ()=>{
@@ -3623,12 +3643,21 @@ document.getElementById('addSplitGroupBtn').onclick = ()=>{
   currentSplitGroupId = group.id;
   renderSplitTab();
 };
-document.getElementById('backToSplitListBtn').onclick = ()=>{ currentSplitGroupId = null; renderSplitTab(); };
+document.getElementById('backToSplitListBtn').onclick = ()=>{ currentSplitGroupId = null; editingSplitBillId = null; renderSplitTab(); };
 
 function renderSplitGroupDetail(groupId){
   const group = splitGroups.find(g=>g.id===groupId);
   if(!group) return;
-  document.getElementById('splitGroupTitle').textContent = group.name;
+  document.getElementById('splitGroupTitle').innerHTML = `${group.name} <span id="renameSplitGroupBtn" class="hint" style="text-decoration:underline;cursor:pointer;font-size:12px;font-weight:400;">改名稱</span>`;
+  document.getElementById('renameSplitGroupBtn').onclick = ()=>{
+    const newName = window.prompt('輸入新的群組名稱：', group.name);
+    if(newName===null) return;
+    const trimmed = newName.trim();
+    if(!trimmed){ alert('名稱不能是空的'); return; }
+    group.name = trimmed;
+    saveSplitGroups();
+    renderSplitGroupDetail(groupId);
+  };
 
   // 成員管理
   const memberWrap = document.getElementById('splitMembersArea');
@@ -3803,7 +3832,14 @@ function renderSplitSettlement(groupId){
   }).join('');
   const txHtml = transactions.length===0 ? '<div class="empty" style="margin-top:8px;">目前不需要任何轉帳，帳已經平了</div>' : `
     <p class="hint" style="margin:10px 0 4px;">建議這樣結清（已用最少轉帳次數計算）：</p>
-    ${transactions.map((t,i)=>`<div class="acc-sub-row"><span>${t.from} → ${t.to}</span><span class="mono">${t.amount.toFixed(0)} <span class="acc-filter" data-settleidx="${i}" style="cursor:pointer;text-decoration:underline;margin-left:6px;">結清</span></span></div>`).join('')}
+    ${transactions.map((t,i)=>`
+      <div class="acc-sub-row" style="flex-direction:column;align-items:stretch;gap:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span>${t.from} → ${t.to}</span>
+          <span class="mono">${t.amount.toFixed(0)}</span>
+        </div>
+        <button type="button" class="btn-secondary" data-settleidx="${i}" style="width:100%;padding:8px;">✓ 標記這筆已結清</button>
+      </div>`).join('')}
   `;
   wrap.innerHTML = balanceHtml + txHtml;
   wrap.querySelectorAll('[data-settleidx]').forEach(btn=>{
@@ -3856,11 +3892,14 @@ function renderSplitBillForm(groupId){
   const group = splitGroups.find(g=>g.id===groupId);
   const wrap = document.getElementById('splitBillFormArea');
   if(!group || group.members.length===0){ wrap.innerHTML = '<div class="empty">請先加入成員，才能記分帳</div>'; return; }
+  const editingBill = editingSplitBillId ? splitBills.find(b=>b.id===editingSplitBillId) : null;
+  if(editingBill) splitBillDraftMethod = editingBill.splitMethod; // 編輯時，分攤方式的切換鈕要對齊這筆原本存的方式
   wrap.innerHTML = `
-    <div class="field"><label>說明</label><input type="text" id="splitBillDesc" placeholder="例如：聖誕大餐"></div>
+    ${editingBill ? `<p class="hint" style="margin-top:0;color:var(--gold);">正在編輯這筆分帳，改完按下方按鈕儲存，或按「取消編輯」放棄修改。</p>` : ''}
+    <div class="field"><label>說明</label><input type="text" id="splitBillDesc" placeholder="例如：聖誕大餐" value="${editingBill ? (editingBill.description||'').replace(/"/g,'&quot;') : ''}"></div>
     <div class="row2">
-      <div class="field"><label>金額</label><input type="number" id="splitBillAmount" placeholder="0"></div>
-      <div class="field"><label>幣別</label><select id="splitBillCurrency">${config.currencies.map(c=>`<option value="${c}">${currencyDisplayName(c)}</option>`).join('')}</select></div>
+      <div class="field"><label>金額</label><input type="number" id="splitBillAmount" placeholder="0" value="${editingBill ? editingBill.amount : ''}"></div>
+      <div class="field"><label>幣別</label><select id="splitBillCurrency">${config.currencies.map(c=>`<option value="${c}" ${editingBill && editingBill.currency===c ? 'selected':''}>${currencyDisplayName(c)}</option>`).join('')}</select></div>
     </div>
     <details class="mini-calc-wrap">
       <summary>🖩 小算盤（算完自動帶入金額）</summary>
@@ -3870,23 +3909,27 @@ function renderSplitBillForm(groupId){
       </div>
     </details>
     <div class="field"><label>誰先墊的</label><select id="splitBillPaidBy">
-      ${group.members.map(m=>`<option value="${m}">${m}</option>`).join('')}
-      ${group.budget ? `<option value="${SPLIT_FUND_PAYER}">🏦 共同基金（直接從活動總額支出，不是某個人先墊的）</option>` : ''}
+      ${group.members.map(m=>`<option value="${m}" ${editingBill && editingBill.paidBy===m ? 'selected':''}>${m}</option>`).join('')}
+      ${group.budget ? `<option value="${SPLIT_FUND_PAYER}" ${editingBill && editingBill.paidBy===SPLIT_FUND_PAYER ? 'selected':''}>🏦 共同基金（直接從活動總額支出，不是某個人先墊的）</option>` : ''}
     </select></div>
     <div class="chip-group" id="splitMethodToggle">
       <button data-method="even" class="${splitBillDraftMethod==='even'?'on':''}">平均分攤</button>
       <button data-method="custom" class="${splitBillDraftMethod==='custom'?'on':''}">自訂每人金額</button>
     </div>
     <div id="splitCustomAmountsArea" style="margin-top:8px;${splitBillDraftMethod==='custom'?'':'display:none;'}">
-      ${group.members.map(m=>`<div class="row2"><label style="align-self:center;">${m}</label><input type="number" class="split-custom-input" data-member="${m}" placeholder="0"></div>`).join('')}
+      ${group.members.map(m=>`<div class="row2"><label style="align-self:center;">${m}</label><input type="number" class="split-custom-input" data-member="${m}" placeholder="0" value="${editingBill && editingBill.splits && editingBill.splits[m]!=null ? editingBill.splits[m] : ''}"></div>`).join('')}
       <p class="hint" id="splitCustomSumHint"></p>
     </div>
-    <button class="btn-primary" id="addSplitBillBtn" style="margin-top:10px;">記這一筆分帳</button>
+    <button class="btn-primary" id="addSplitBillBtn" style="margin-top:10px;">${editingBill ? '儲存修改' : '記這一筆分帳'}</button>
+    ${editingBill ? `<button class="btn-secondary" id="cancelEditSplitBillBtn" style="margin-top:8px;width:100%;">取消編輯</button>` : ''}
   `;
   setupMiniCalc('splitCalcDisplay','splitCalcGrid','splitBillAmount');
   document.querySelectorAll('#splitMethodToggle button').forEach(btn=>{
     btn.onclick = ()=>{ splitBillDraftMethod = btn.dataset.method; renderSplitBillForm(groupId); };
   });
+  if(editingBill){
+    document.getElementById('cancelEditSplitBillBtn').onclick = ()=>{ editingSplitBillId = null; renderSplitBillForm(groupId); };
+  }
   document.getElementById('addSplitBillBtn').onclick = ()=>{
     const desc = document.getElementById('splitBillDesc').value.trim();
     const amount = parseFloat(document.getElementById('splitBillAmount').value);
@@ -3912,10 +3955,21 @@ function renderSplitBillForm(groupId){
       if(Math.abs(sum - amount) > 0.5){ alert(`自訂金額加總（${sum}）跟總金額（${amount}）對不上，請重新確認每人金額。`); return; }
     }
     const twdAmount = toTWD(amount, currency);
-    splitBills.push({
-      id: Date.now().toString(36)+Math.random().toString(36).slice(2,6),
-      groupId, date: todayLocal(), description: desc, amount, currency, twdAmount, paidBy, splitMethod: splitBillDraftMethod, splits
-    });
+    if(editingBill){
+      editingBill.description = desc;
+      editingBill.amount = amount;
+      editingBill.currency = currency;
+      editingBill.twdAmount = twdAmount;
+      editingBill.paidBy = paidBy;
+      editingBill.splitMethod = splitBillDraftMethod;
+      editingBill.splits = splits;
+      editingSplitBillId = null;
+    } else {
+      splitBills.push({
+        id: Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+        groupId, date: todayLocal(), description: desc, amount, currency, twdAmount, paidBy, splitMethod: splitBillDraftMethod, splits
+      });
+    }
     saveSplitBills();
     renderSplitGroupDetail(groupId);
   };
@@ -3949,7 +4003,7 @@ function renderSplitBillList(groupId){
     return `<div class="acc-sub-row" style="flex-direction:column;align-items:stretch;">
       <div style="display:flex;justify-content:space-between;">
         <span>${b.description||'（無說明）'}・${b.paidBy===SPLIT_FUND_PAYER?'🏦 共同基金支出':b.paidBy+'先付'}<br><span class="hint" style="margin:0;">${b.date}</span></span>
-        <span class="mono">${b.amount.toFixed(0)} ${currencyDisplayName(b.currency)} <span class="del-sub" data-billid="${b.id}" style="margin-left:6px;">刪除</span></span>
+        <span class="mono">${b.amount.toFixed(0)} ${currencyDisplayName(b.currency)} <span class="acc-filter" data-editbillid="${b.id}" style="margin-left:6px;">編輯</span> <span class="del-sub" data-billid="${b.id}" style="margin-left:4px;">刪除</span></span>
       </div>
       ${syncHtml}
     </div>`;
@@ -3960,6 +4014,16 @@ function renderSplitBillList(groupId){
       splitBills = splitBills.filter(b=>b.id!==btn.dataset.billid);
       saveSplitBills();
       renderSplitGroupDetail(groupId);
+    };
+  });
+  wrap.querySelectorAll('[data-editbillid]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const bill = splitBills.find(b=>b.id===btn.dataset.editbillid);
+      if(!bill) return;
+      if(bill.syncedEntryId && !confirm('這筆分帳已經同步加入過你的個人記帳了。修改這裡不會自動去更新那筆記帳紀錄（那筆已經是獨立存好的資料），確定還要繼續編輯嗎？')) return;
+      editingSplitBillId = bill.id;
+      renderSplitBillForm(groupId);
+      document.getElementById('splitBillFormArea').scrollIntoView({ behavior:'smooth', block:'start' });
     };
   });
   wrap.querySelectorAll('[data-syncbill]').forEach(btn=>{
