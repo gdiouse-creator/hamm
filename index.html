@@ -606,6 +606,12 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
     <details class="settings-section">
       <summary>外觀配色</summary>
       <div class="settings-body">
+        <p class="hint" style="margin-top:0">字體大小：</p>
+        <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:16px;">
+          <button type="button" class="btn-secondary" id="fontSizeMinusBtn" style="width:44px;padding:8px 0;font-size:18px;">－</button>
+          <span class="mono" id="fontSizeDisplay" style="min-width:48px;text-align:center;">100%</span>
+          <button type="button" class="btn-secondary" id="fontSizePlusBtn" style="width:44px;padding:8px 0;font-size:18px;">＋</button>
+        </div>
         <p class="hint" style="margin-top:0">推薦配色，點一下直接套用：</p>
         <div class="theme-preset-grid" id="themePresetGrid"></div>
         <p class="hint">或自己調整（改了任何一個顏色就會變成「自訂」）：</p>
@@ -642,6 +648,30 @@ const THEME_PRESETS = {
 function applyTheme(colors){
   THEME_KEYS.forEach(k=>{ if(colors[k]) document.documentElement.style.setProperty(THEME_CSS_VAR[k], colors[k]); });
 }
+function applyFontSizeScale(scale){
+  document.body.style.zoom = scale; // Android Chrome（這個 App 主要使用的環境）支援良好，比重寫整份CSS改成相對單位風險低很多
+  const displayEl = document.getElementById('fontSizeDisplay');
+  if(displayEl) displayEl.textContent = Math.round(scale*100)+'%';
+  applyChartCounterZoom();
+}
+function applyChartCounterZoom(){
+  // 圖表用畫布(canvas)畫的，跟著整頁一起縮放容易糊掉，所以圖表反向抵消外層的縮放，維持固定大小不受字體設定影響。
+  const inverseScale = 1 / (config.fontSizeScale || 1);
+  ['lineChart','reportChart'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.style.zoom = inverseScale;
+  });
+}
+document.getElementById('fontSizeMinusBtn').onclick = ()=>{
+  config.fontSizeScale = Math.max(0.7, Math.round((config.fontSizeScale - 0.1)*10)/10);
+  saveConfig();
+  applyFontSizeScale(config.fontSizeScale);
+};
+document.getElementById('fontSizePlusBtn').onclick = ()=>{
+  config.fontSizeScale = Math.min(1.6, Math.round((config.fontSizeScale + 0.1)*10)/10);
+  saveConfig();
+  applyFontSizeScale(config.fontSizeScale);
+};
 
 const DEFAULT_CONFIG = {
   categoryTypes:["餐飲","生活","消費娛樂","知識","交通","寵物","醫藥","稅務","人情","薪資","兼職","獎金","意外"],
@@ -673,6 +703,7 @@ const DEFAULT_CONFIG = {
   startDate: null,
   _migratedToCalibration: false,
   themePreset: 'classic',
+  fontSizeScale: 1,
   themeColors: { paper:'#F6F1E7', paperLine:'#E4DCC8', ink:'#1D2A44', inkSoft:'#5C6B85', stampRed:'#B23A34', stampGreen:'#4C7A5C', gold:'#C9A227', card:'#FFFDF7' },
   categorySubIcons: {},
   categoryTypeIcons: {},
@@ -986,6 +1017,7 @@ async function loadData(){
   catch(err){ config = deepClone(DEFAULT_CONFIG); }
   config = migrateConfig(config);
   applyTheme(config.themeColors);
+  applyFontSizeScale(config.fontSizeScale);
   backfillDefaultIcons();
   migrateEntries();
   cleanupOtherBucket();
@@ -1156,6 +1188,7 @@ function migrateConfig(c){
   if(c.assetMode !== 'manual' && c.assetMode !== 'auto') c.assetMode = 'manual';
   if(typeof c._migratedToCalibration !== 'boolean') c._migratedToCalibration = false;
   if(typeof c.themePreset !== 'string' || !THEME_PRESETS[c.themePreset]) c.themePreset = c.themePreset==='custom' ? 'custom' : 'classic';
+  if(typeof c.fontSizeScale !== 'number' || c.fontSizeScale<0.7 || c.fontSizeScale>1.6) c.fontSizeScale = 1;
   if(typeof c.themeColors !== 'object' || c.themeColors===null) c.themeColors = deepClone(THEME_PRESETS.classic.colors);
   THEME_KEYS.forEach(k=>{ if(!c.themeColors[k]) c.themeColors[k] = THEME_PRESETS.classic.colors[k]; });
   if(typeof c.categorySubIcons !== 'object' || c.categorySubIcons===null) c.categorySubIcons = {};
@@ -2362,6 +2395,7 @@ function renderReport(){
   else if(reportMode==='weekday') renderWeekdayBars();
   else if(reportMode==='detailtable') renderDetailTable();
   else if(reportMode==='categoryavg') renderCategoryAverage();
+  applyChartCounterZoom();
 }
 document.querySelectorAll('#reportModeToggle button').forEach(btn=>{
   btn.onclick = ()=>{
@@ -3084,6 +3118,7 @@ function renderStats(){
   renderBreakdown();
   renderLineChart();
   if(reportDetailsEl && reportDetailsEl.open) renderReport();
+  applyChartCounterZoom();
 }
 
 document.getElementById('manualRefreshStatsBtn').onclick = ()=>{
