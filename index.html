@@ -441,7 +441,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
       </div>
 
       <div id="blockCalibration" style="display:none">
-        <p class="hint" style="margin-top:0">用在你實際盤點後（例如查看銀行 App、數現金），發現跟系統算出來的不一樣，直接輸入「現在實際的金額」，系統會自動記一筆差額校正，不會算進本月收支。</p>
+        <p class="hint" style="margin-top:0">用在你實際盤點後（例如查看銀行 App、數現金），發現跟系統算出來的不一樣，直接輸入「現在實際的金額」，系統會自動記一筆差額校正。最初設定家底不會算進本月收支；事後的補正，短少會算一筆支出、多出會算一筆收入（但不歸類到任何分類）。</p>
         <div class="row2">
           <div class="field"><label>錢包類型</label><div class="select-add"><select id="fCalType"></select><span class="mini-plus" id="addCalTypeInline">+</span></div></div>
           <div class="field"><label>錢包明細</label><div class="select-add"><select id="fCalSub"></select><span class="mini-plus" id="addCalSubInline">+</span></div></div>
@@ -461,6 +461,7 @@ input:disabled,select:disabled{background:var(--paper);color:var(--ink-soft);}
   <section id="tab-list" style="display:none">
     <div class="card">
       <h2>近期紀錄</h2>
+      <input type="search" id="listSearchInput" placeholder="搜尋備註、類別、錢包、日期、金額…" style="margin-bottom:8px;">
       <div id="listFilterBar" style="display:none;"></div>
       <div id="entryList"></div>
     </div>
@@ -1022,6 +1023,7 @@ async function loadData(){
   migrateEntries();
   cleanupOtherBucket();
   migrateToCalibration();
+  migrateCorrectionExpenseCutoff();
   try{ const v = await idbGet('ledger-split-groups'); splitGroups = v ? JSON.parse(v) : []; }
   catch(err){ splitGroups = []; }
   try{ const v = await idbGet('ledger-split-bills'); splitBills = v ? JSON.parse(v) : []; }
@@ -1165,6 +1167,21 @@ function migrateToCalibration(){
   if(changed){ saveConfig(); saveEntries(); }
 }
 
+// 既往不咎：補正校正算進收支這個規則是這次才新增的。在這次更新「之前」就已經存在的補正紀錄，
+// 全部標記為 legacyBeforeExpenseRule，永久排除在這個規則之外，不會讓使用者之前看過、算過的月份數字突然變動。
+// 只有標記之後「新增」的補正紀錄，才會照新規則算進支出／收入。這個標記只補一次（用 config 旗標擋掉重複執行），
+// 之後就算使用者再編輯這筆舊紀錄，也維持排除（因為它代表的是「新規則上路之前」那個時間點就已經存在的資料）。
+function migrateCorrectionExpenseCutoff(){
+  if(config._migratedCorrectionExpenseCutoff) return;
+  entries.forEach(e=>{
+    if(e.type==='calibration' && e.calibrationKind!=='setup'){
+      e.legacyBeforeExpenseRule = true;
+    }
+  });
+  config._migratedCorrectionExpenseCutoff = true;
+  saveConfig(); saveEntries();
+}
+
 function migrateConfig(c){
   c = c || {};
   if(!Array.isArray(c.categoryTypes)) c.categoryTypes = deepClone(DEFAULT_CONFIG.categoryTypes);
@@ -1187,6 +1204,7 @@ function migrateConfig(c){
   if(typeof c.walletBalances !== 'object' || c.walletBalances===null) c.walletBalances = {};
   if(c.assetMode !== 'manual' && c.assetMode !== 'auto') c.assetMode = 'manual';
   if(typeof c._migratedToCalibration !== 'boolean') c._migratedToCalibration = false;
+  if(typeof c._migratedCorrectionExpenseCutoff !== 'boolean') c._migratedCorrectionExpenseCutoff = false;
   if(typeof c.themePreset !== 'string' || !THEME_PRESETS[c.themePreset]) c.themePreset = c.themePreset==='custom' ? 'custom' : 'classic';
   if(typeof c.fontSizeScale !== 'number' || c.fontSizeScale<0.7 || c.fontSizeScale>1.6) c.fontSizeScale = 1;
   if(typeof c.themeColors !== 'object' || c.themeColors===null) c.themeColors = deepClone(THEME_PRESETS.classic.colors);
@@ -1917,68 +1935,66 @@ function balanceLine(label, tl){
   return `<div class="entry-twd-note">${label}：${tl.before.toFixed(0)} → ${tl.after.toFixed(0)} ${currencyDisplayName(tl.currency)}</div>`;
 }
 
-function renderList(){
-  const wrap = document.getElementById('entryList');
-  const filterBar = document.getElementById('listFilterBar');
-  let list = entries;
-  if(listFilter){
-    list = entries.filter(e => entryMatchesFilter(e, listFilter));
-    filterBar.style.display = 'flex';
-    filterBar.className = 'filter-bar';
-    filterBar.innerHTML = `<span>篩選中：${filterLabel(listFilter)}（共 ${list.length} 筆）</span><button id="clearFilterBtn">清除篩選</button>`;
-    document.getElementById('clearFilterBtn').onclick = ()=>{ listFilter=null; renderList(); };
-  } else {
-    filterBar.style.display = 'none';
-    filterBar.innerHTML = '';
-  }
-  if(list.length===0){ wrap.innerHTML = `<div class="empty">${listFilter ? '這個篩選條件下沒有紀錄' : '還沒有任何紀錄'}</div>`; return; }
-  const timelines = computeEntryTimelines();
-  const sorted = [...list].sort((a,b)=> (b.date+b.time).localeCompare(a.date+a.time));
-  wrap.innerHTML = sorted.map(e=>{
-    const tl = timelines[e.id] || {};
-    if(e.type==='calibration'){
-      return `<div class="entry-row">
-        <div style="flex:1">
-          <div class="desc">${walletLabelWithIcon(e.walletType,e.walletSub)} 校正${e.note?' · '+e.note:''}</div>
-          <div class="meta">${e.date} ${e.time||''}</div>
-          ${balanceLine('校正後', tl.main)}
-        </div>
-        <div style="text-align:right">
-          <div class="amt mono" style="color:var(--ink-soft)">${e.delta>=0?'+':''}${(e.delta||0).toFixed(2)}</div>
-        </div>
-        <div class="row-actions"><span class="edit" data-id="${e.id}">編輯</span><span class="del" data-id="${e.id}">刪除</span></div>
-      </div>`;
-    }
-    const twd = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
-    const twdNote = e.currency!=='TWD' ? `<span class="entry-twd-note">≈ ${twd.toFixed(0)} 新台幣</span>` : '';
-    if(e.type==='transfer'){
-      return `<div class="entry-row">
-        <div style="flex:1">
-          <div class="desc">${walletLabelWithIcon(e.fromType,e.fromSub)} → ${walletLabelWithIcon(e.toType,e.toSub)}</div>
-          <div class="meta">${e.date} ${e.time||''} · 轉帳${e.note?' · '+e.note:''}</div>
-          ${balanceLine(walletLabelWithIcon(e.fromType,e.fromSub), tl.from)}
-          ${balanceLine(walletLabelWithIcon(e.toType,e.toSub), tl.to)}
-        </div>
-        <div style="text-align:right">
-          <div class="amt transfer mono">${e.amount} ${currencyDisplayName(e.currency)}</div>
-          ${twdNote}
-        </div>
-        <div class="row-actions"><span class="edit" data-id="${e.id}">編輯</span><span class="del" data-id="${e.id}">刪除</span></div>
-      </div>`;
-    }
+// 紀錄頁：平常依「月份」收合成一疊一疊，點開某個月才會真的畫出那個月的明細（關掉就清掉），
+// 這樣不管累積幾年，畫面上的 DOM 量只跟「展開了幾個月」有關，不會跟總筆數成正比。
+// 有「篩選」（從統計頁點連結過來）或「搜尋」時，改成連貫的完整列表，方便一次看完符合條件的所有紀錄。
+let listSearch = '';
+let expandedListMonths = null; // null = 還沒初始化；第一次畫的時候預設展開最新的那個月
+
+function entryRowHtml(e, timelines){
+  const tl = timelines[e.id] || {};
+  if(e.type==='calibration'){
     return `<div class="entry-row">
       <div style="flex:1">
-        <div class="desc">${categoryLabelWithIcon(e.categoryType,e.categorySub)}${e.location?' · '+e.location:''}</div>
-        <div class="meta">${e.date} ${e.time||''} · ${walletLabelWithIcon(e.walletType,e.walletSub)}${e.note?' · '+e.note:''}</div>
-        ${balanceLine(walletLabelWithIcon(e.walletType,e.walletSub), tl.main)}
+        <div class="desc">${walletLabelWithIcon(e.walletType,e.walletSub)} 校正${e.note?' · '+e.note:''}</div>
+        <div class="meta">${e.date} ${e.time||''}</div>
+        ${balanceLine('校正後', tl.main)}
       </div>
       <div style="text-align:right">
-        <div class="amt ${e.type} mono">${e.type==='expense'?'-':'+'}${e.amount} ${currencyDisplayName(e.currency)}</div>
+        <div class="amt mono" style="color:var(--ink-soft)">${e.delta>=0?'+':''}${(e.delta||0).toFixed(2)}</div>
+      </div>
+      <div class="row-actions"><span class="edit" data-id="${e.id}">編輯</span><span class="del" data-id="${e.id}">刪除</span></div>
+    </div>`;
+  }
+  const twd = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
+  const twdNote = e.currency!=='TWD' ? `<span class="entry-twd-note">≈ ${twd.toFixed(0)} 新台幣</span>` : '';
+  if(e.type==='transfer'){
+    return `<div class="entry-row">
+      <div style="flex:1">
+        <div class="desc">${walletLabelWithIcon(e.fromType,e.fromSub)} → ${walletLabelWithIcon(e.toType,e.toSub)}</div>
+        <div class="meta">${e.date} ${e.time||''} · 轉帳${e.note?' · '+e.note:''}</div>
+        ${balanceLine(walletLabelWithIcon(e.fromType,e.fromSub), tl.from)}
+        ${balanceLine(walletLabelWithIcon(e.toType,e.toSub), tl.to)}
+      </div>
+      <div style="text-align:right">
+        <div class="amt transfer mono">${e.amount} ${currencyDisplayName(e.currency)}</div>
         ${twdNote}
       </div>
       <div class="row-actions"><span class="edit" data-id="${e.id}">編輯</span><span class="del" data-id="${e.id}">刪除</span></div>
     </div>`;
-  }).join('');
+  }
+  return `<div class="entry-row">
+    <div style="flex:1">
+      <div class="desc">${categoryLabelWithIcon(e.categoryType,e.categorySub)}${e.location?' · '+e.location:''}</div>
+      <div class="meta">${e.date} ${e.time||''} · ${walletLabelWithIcon(e.walletType,e.walletSub)}${e.note?' · '+e.note:''}</div>
+      ${balanceLine(walletLabelWithIcon(e.walletType,e.walletSub), tl.main)}
+    </div>
+    <div style="text-align:right">
+      <div class="amt ${e.type} mono">${e.type==='expense'?'-':'+'}${e.amount} ${currencyDisplayName(e.currency)}</div>
+      ${twdNote}
+    </div>
+    <div class="row-actions"><span class="edit" data-id="${e.id}">編輯</span><span class="del" data-id="${e.id}">刪除</span></div>
+  </div>`;
+}
+
+function entryMatchesSearch(e, q){
+  const hay = [e.note, e.location, e.categoryType, e.categorySub, e.walletType, e.walletSub,
+    e.fromType, e.fromSub, e.toType, e.toSub, e.date, e.amount, e.currency, e.type==='calibration'?'校正':'', e.type==='transfer'?'轉帳':'']
+    .filter(v=>v!==undefined && v!==null && v!=='').join(' ').toLowerCase();
+  return q.toLowerCase().split(/\s+/).filter(Boolean).every(tok=>hay.includes(tok));
+}
+
+function bindEntryRowActions(wrap){
   wrap.querySelectorAll('.del').forEach(el=>{
     el.onclick = ()=>{
       if(!confirm('確定刪除這筆紀錄？')) return;
@@ -1988,6 +2004,87 @@ function renderList(){
   });
   wrap.querySelectorAll('.edit').forEach(el=>{
     el.onclick = ()=> startEditEntry(el.dataset.id);
+  });
+}
+
+function renderList(){
+  const wrap = document.getElementById('entryList');
+  const filterBar = document.getElementById('listFilterBar');
+  const q = listSearch.trim();
+  let list = entries;
+  if(listFilter) list = list.filter(e => entryMatchesFilter(e, listFilter));
+  if(q) list = list.filter(e => entryMatchesSearch(e, q));
+  const flatMode = !!(listFilter || q);
+
+  if(flatMode){
+    const parts = [];
+    if(listFilter) parts.push(`篩選：${filterLabel(listFilter)}`);
+    if(q) parts.push(`搜尋「${q.replace(/</g,'&lt;')}」`);
+    filterBar.style.display = 'flex';
+    filterBar.className = 'filter-bar';
+    filterBar.innerHTML = `<span>${parts.join('・')}（共 ${list.length} 筆）</span><button id="clearFilterBtn">清除</button>`;
+    document.getElementById('clearFilterBtn').onclick = ()=>{
+      listFilter = null; listSearch = '';
+      const inp = document.getElementById('listSearchInput'); if(inp) inp.value = '';
+      renderList();
+    };
+  } else {
+    filterBar.style.display = 'none';
+    filterBar.innerHTML = '';
+  }
+
+  if(list.length===0){
+    wrap.innerHTML = `<div class="empty">${flatMode ? '沒有符合條件的紀錄' : '還沒有任何紀錄'}</div>`;
+    return;
+  }
+  const timelines = computeEntryTimelines();
+  const sorted = [...list].sort((a,b)=> (b.date+(b.time||'')).localeCompare(a.date+(a.time||'')));
+
+  if(flatMode){
+    wrap.innerHTML = sorted.map(e=>entryRowHtml(e, timelines)).join('');
+    bindEntryRowActions(wrap);
+    return;
+  }
+
+  // 月份收合模式
+  const byMonth = {};
+  sorted.forEach(e=>{ const ym = e.date.slice(0,7); (byMonth[ym] = byMonth[ym] || []).push(e); });
+  const months = Object.keys(byMonth).sort().reverse();
+  if(expandedListMonths===null) expandedListMonths = new Set([months[0]]);
+  wrap.innerHTML = months.map(ym=>{
+    let inc=0, exp=0;
+    byMonth[ym].forEach(e=>{
+      if(e.type==='transfer') return;
+      if(e.type==='calibration'){ const c = calibrationCorrectionTWD(e); inc+=c.income; exp+=c.expense; return; }
+      const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount, e.currency);
+      if(e.type==='income') inc+=amt; else exp+=amt;
+    });
+    const open = expandedListMonths.has(ym);
+    return `<details class="acc-block" data-month="${ym}"${open?' open':''}>
+      <summary class="acc-head">
+        <span class="acc-title"><span class="acc-arrow">▸</span>${monthLabel(ym)}</span>
+        <span class="acc-extra mono">${byMonth[ym].length} 筆</span>
+        <span class="acc-amt mono">收 ${inc.toFixed(0)}／支 ${exp.toFixed(0)}</span>
+      </summary>
+      <div class="acc-body">${open ? byMonth[ym].map(e=>entryRowHtml(e, timelines)).join('') : ''}</div>
+    </details>`;
+  }).join('');
+  wrap.querySelectorAll('details[data-month]').forEach(d=>{
+    const ym = d.dataset.month;
+    const body = d.querySelector('.acc-body');
+    if(d.open) bindEntryRowActions(body);
+    d.addEventListener('toggle', ()=>{
+      if(d.open){
+        expandedListMonths.add(ym);
+        if(!body.innerHTML){
+          body.innerHTML = byMonth[ym].map(e=>entryRowHtml(e, timelines)).join('');
+          bindEntryRowActions(body);
+        }
+      } else {
+        expandedListMonths.delete(ym);
+        body.innerHTML = '';
+      }
+    });
   });
 }
 
@@ -2097,8 +2194,19 @@ function switchTab(name){
   });
 }
 
+(function(){
+  const inp = document.getElementById('listSearchInput');
+  let timer = null;
+  inp.addEventListener('input', ()=>{
+    clearTimeout(timer);
+    timer = setTimeout(()=>{ listSearch = inp.value; renderList(); }, 250);
+  });
+})();
+
 function applyListFilter(filter){
   listFilter = filter;
+  listSearch = '';
+  const searchInp = document.getElementById('listSearchInput'); if(searchInp) searchInp.value = '';
   switchTab('list');
   renderList();
 }
@@ -2420,7 +2528,7 @@ function renderNetWorthChart(){
   });
 }
 function renderSavingsRateChart(){
-  document.getElementById('reportModeHint').textContent = '每月「(收入－支出)÷收入」的儲蓄率，收入為 0 的月份不計算。只看當月實際收支，不受校正（不管是最初設定或後續補正）影響——校正代表的資產變化，交給「淨資產趨勢」呈現。';
+  document.getElementById('reportModeHint').textContent = '每月「(收入－支出)÷收入」的儲蓄率，收入為 0 的月份不計算。最初建檔的那筆校正不計入；之後的補正，短少算一筆支出、多出算一筆收入，會反映在這裡（但不歸類到任何分類）。';
   if(typeof Chart==='undefined') return;
   const series = computeSeries('month');
   const labels=[], data=[];
@@ -2930,8 +3038,19 @@ document.querySelectorAll('#catModeToggle button').forEach(btn=>{
   };
 });
 
+// 補正（非建檔）校正差額：短少（delta<0）算一筆支出、多出（delta>0）算一筆收入，
+// 金額用鎖定的 deltaTWD（不受匯率飄移影響），但不歸類到任何分類，只影響「本月收支」「儲蓄率」這類總額型報表。
+// 最初建檔的那一筆（calibrationKind==='setup'）不算，維持原本「不影響收支」的設計。
+function calibrationCorrectionTWD(e){
+  if(e.type!=='calibration' || e.calibrationKind==='setup') return {income:0, expense:0};
+  if(e.legacyBeforeExpenseRule) return {income:0, expense:0}; // 既往不咎：規則上路前就存在的補正紀錄，維持排除
+  const amt = (typeof e.deltaTWD==='number') ? e.deltaTWD : ((e.currency==='TWD') ? e.delta : toTWD(e.delta, e.currency));
+  if(amt>0) return {income:amt, expense:0};
+  if(amt<0) return {income:0, expense:-amt};
+  return {income:0, expense:0};
+}
 function computeSeries(granularity){
-  const relevant = entries.filter(e=>e.type!=='transfer' && e.type!=='adjustment' && e.type!=='calibration');
+  const relevant = entries.filter(e=>e.type!=='transfer' && e.type!=='adjustment' && (e.type!=='calibration' || e.calibrationKind!=='setup'));
   const buckets = {};
   function bucketKeyFor(dateStr){
     const d = new Date(dateStr+'T00:00:00');
@@ -2946,6 +3065,11 @@ function computeSeries(granularity){
   relevant.forEach(e=>{
     const key = bucketKeyFor(e.date);
     if(!buckets[key]) buckets[key] = {income:0, expense:0};
+    if(e.type==='calibration'){
+      const c = calibrationCorrectionTWD(e);
+      buckets[key].income += c.income; buckets[key].expense += c.expense;
+      return;
+    }
     const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
     if(e.type==='income') buckets[key].income += amt; else buckets[key].expense += amt;
   });
@@ -3105,9 +3229,13 @@ document.getElementById('resetMonthBtn').onclick = ()=>{ selectedStatsMonth = nu
 
 function renderStats(){
   const ym = getStatsMonth();
-  const monthEntries = entries.filter(e=>e.date.startsWith(ym) && e.type!=='transfer' && e.type!=='adjustment' && e.type!=='calibration');
+  const monthEntries = entries.filter(e=>e.date.startsWith(ym) && e.type!=='transfer' && e.type!=='adjustment' && (e.type!=='calibration' || e.calibrationKind!=='setup'));
   let income=0, expense=0;
-  monthEntries.forEach(e=>{ const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency); if(e.type==='income') income+=amt; else expense+=amt; });
+  monthEntries.forEach(e=>{
+    if(e.type==='calibration'){ const c = calibrationCorrectionTWD(e); income+=c.income; expense+=c.expense; return; }
+    const amt = (typeof e.twdAmount==='number') ? e.twdAmount : toTWD(e.amount,e.currency);
+    if(e.type==='income') income+=amt; else expense+=amt;
+  });
   document.getElementById('statIncome').textContent = income.toFixed(0);
   document.getElementById('statExpense').textContent = expense.toFixed(0);
   document.getElementById('statBalance').textContent = (income-expense).toFixed(0);
@@ -3304,6 +3432,9 @@ document.getElementById('saveBtn').onclick = ()=>{
       targetAmount: target, delta, deltaTWD, note: noteVal,
       calibrationKind: document.getElementById('fCalIsSetup').checked ? 'setup' : 'correction'
     };
+    // 既往不咎：編輯一筆規則上路前就存在的舊補正紀錄時，繼續沿用它原本「排除在收支之外」的標記，
+    // 不會因為改了備註之類的小地方，就讓它突然被算進支出／收入。
+    if(original && original.legacyBeforeExpenseRule) e.legacyBeforeExpenseRule = true;
   }else{
     const original = editingId ? entries.find(x=>x.id===editingId) : null;
     // twdAmount 是「當初那筆錢換算成台幣是多少」的歷史事實。
@@ -3478,6 +3609,8 @@ document.getElementById('importBtn').onclick = ()=>{
       config = migrateConfig(payload.config);
       migrateEntries();
       cleanupOtherBucket();
+      migrateToCalibration();
+      migrateCorrectionExpenseCutoff();
       backfillDefaultIcons();
       recordExport();
       saveEntries(); saveConfig();
@@ -3575,6 +3708,8 @@ document.getElementById('importCsvBtn').onclick = ()=>{
       entries = newEntries;
       migrateEntries();
       cleanupOtherBucket();
+      migrateToCalibration();
+      migrateCorrectionExpenseCutoff();
       backfillDefaultIcons();
       recordExport();
       saveEntries(); saveConfig();
